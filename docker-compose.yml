@@ -1,0 +1,30 @@
+# ┌──────────────────────────────────────────────────────────┐
+# │  Zimbra FOSS Builder — docker-compose.yml                │
+# │  Easy mode: docker compose up --build                    │
+# └──────────────────────────────────────────────────────────┘
+
+services:
+  zimbra-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: "${BASE_IMAGE:-ubuntu:22.04}"
+        ZIMBRA_VERSION: "${ZIMBRA_VERSION:-latest}"
+        BUILD_UID: "${BUILD_UID:-1000}"
+        BUILD_GID: "${BUILD_GID:-1000}"
+        TZ: "${TZ:-Etc/UTC}"
+    image: "zimbra-builder:local-zimbra${ZIMBRA_VERSION:-latest}"
+    container_name: zimbra-builder
+    environment:
+      - ZIMBRA_VERSION=${ZIMBRA_VERSION:-latest}
+    volumes:
+      - ./builds:/home/build/installer-build/BUILDS:rw
+    command: ["--build"]
+    
+    # Resource limits (optional — uncomment to constrain)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 8G
+    #       cpus: '4'

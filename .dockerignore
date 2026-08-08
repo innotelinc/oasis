@@ -1,0 +1,27 @@
+# Build output
+builds/
+
+# Environment files
+.env
+.env.example
+install-config.env
+scripts/install-config.env
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docs
+README.md
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
