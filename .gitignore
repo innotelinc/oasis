@@ -1,0 +1,17 @@
+# Build output
+builds/
+
+# Environment files with secrets
+.env
+install-config.env
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
