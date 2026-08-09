@@ -97,7 +97,14 @@ cp .env.example .env   # edit with your preferences
 
 # With custom config
 ./build.sh deploy root@mail.example.com --config my-install.env
+
+# With an explicit installer file (or --tgz path/to/zcs-*.tgz)
+./build.sh deploy root@mail.example.com ./builds/zcs-10.1.16_GA_*.UBUNTU24_64.*.tgz
 ```
+
+> **Note:** edit `scripts/install-config.env` (hostname, domain, public IP, admin
+> passwords, and the relay settings from the port-25 section below) **before**
+> deploying — the installer reads it during setup.
 
 ### Option B: Manual Install
 
@@ -133,12 +140,66 @@ The install script covers the complete server setup:
 | Zimbra Install | Extracts and runs Zimbra installer |
 | Post-config | HTTPS redirect, LMTP, Amavis, SpamAssassin |
 | SSL | Let's Encrypt certificate + deployment |
-| Relay | Gmail/ISP outbound relay configuration |
+| Relay | Smarthost outbound relay (bypasses ISP port-25 block) |
 | Theme | Zextras theme (optional) |
-| Email Relay | Emailrelay for ISP multi-server setups |
+| Email Relay | Emailrelay local submission proxy (optional) |
 | Swap | Creates swap file |
 
 ---
+
+## Outbound Mail When Your ISP Blocks Port 25
+
+Most residential/office ISPs block **outbound TCP port 25**, which makes direct
+delivery to other mail servers impossible. There is no way around this from
+your own connection: remote mail servers only accept mail on port 25, so
+*something* off your network must do the final delivery.
+
+### How it works here
+
+1. Zimbra's Postfix relays **all** outbound mail to a smarthost on an **open**
+   port (`587` submission, `465` SMTPS, or a custom port) with STARTTLS + AUTH.
+2. The smarthost (not you) performs the final port-25 delivery to the internet.
+
+Configure it in `scripts/install-config.env`:
+
+```bash
+RELAY_ENABLED=true
+RELAY_HOST="[smtp.yourisp.net]:587"   # or [smtp.gmail.com]:587, [smtp.zoho.com]:587 ...
+RELAY_USER="you@example.com"
+RELAY_PASSWORD="your-password"
+RELAY_TLS_LEVEL="may"                # may = STARTTLS if offered, encrypt = require TLS
+```
+
+The `[...]` brackets force Postfix to use the exact host:port (no MX lookup).
+
+### Fully self-managed option: relay through your own VPS
+
+If you don't want to depend on Google/Zoho, run emailrelay on any cheap VPS
+(~$5/mo — VPS providers don't block port 25):
+
+```bash
+# 1. On the VPS (as root), install emailrelay as an authenticated relay:
+git clone https://github.com/innotelinc/mail-platform.git
+cd mail-platform/scripts && sudo bash setup-vps-relay.sh
+
+# 2. It prints RELAY_HOST / RELAY_USER / RELAY_PASSWORD — put them in install-config.env:
+RELAY_ENABLED=true
+RELAY_HOST="[vps-ip-or-host]:587"
+RELAY_USER="mailrelay"
+RELAY_PASSWORD="<printed password>"
+RELAY_TLS_LEVEL="encrypt"
+```
+
+`setup-vps-relay.sh` builds emailrelay from the innotelinc fork, listens on
+`587` (override with `--port 2525`) with **STARTTLS required + auth** (the mode
+Postfix uses natively), and delivers to the world via DNS MX. It also checks
+that the VPS itself can reach outbound port 25 (some providers block it by
+default). The emailrelay instance on the **mail server** (if enabled) is a
+separate, optional local submission proxy — it does not replace this relay.
+
+> **Delivery reputation:** for best deliverability, set a PTR/reverse-DNS record
+> on the VPS IP, an `A` record for the mail host, and proper SPF + DKIM for your
+> domain. Gmail/Google Workspace relays also require SPF/DKIM alignment.
 
 ## Configuration Reference
 
@@ -159,11 +220,12 @@ ZIMBRA_LDAP_PASSWORD="YourSecurePassword123"
 LETSENCRYPT_EMAIL=admin@example.com
 SSL_DOMAINS=("mail.example.com")
 
-# Outbound Relay (Gmail SMTP)
+# Outbound Relay (smarthost — bypasses ISP port-25 block)
 RELAY_ENABLED=true
-RELAY_HOST="[smtp.gmail.com]:587"
+RELAY_HOST="[smtp.gmail.com]:587"   # or your ISP relay / own VPS
 RELAY_USER="yourname@gmail.com"
 RELAY_PASSWORD="your-app-password"
+RELAY_TLS_LEVEL="may"
 
 # Skip sections
 SKIP_SSL=false
@@ -180,10 +242,10 @@ DRY_RUN=false
 
 When using `ZIMBRA_VERSION=latest` (default), the script:
 
-1. Queries the [Zimbra FOSS Releases wiki](https://wiki.zimbra.com/wiki/Zimbra_Foss_Source_Code_Only_Releases)
-2. Finds the highest version number (excluding beta/RC)
-3. Falls back to release branches if no tag exists
-4. Defaults to 10.1.16 if nothing is found
+1. Reads the release tags from the official [Zimbra zm-build repository](https://github.com/Zimbra/zm-build) (`git ls-remote`)
+2. Keeps only plain `X.Y.Z` FOSS release tags (excludes betas/RCs and `X.Y.Z.pN` patches)
+3. Picks the highest version number
+4. Defaults to 10.1.16 if the repo can't be reached
 
 ---
 
@@ -263,12 +325,36 @@ After a successful build, the installer lands in `./builds/`:
 └── scripts/
     ├── entrypoint.sh         # Container entrypoint (detect OS, run zm-build)
     ├── install.sh            # Universal Zimbra installer (Ubuntu + RHEL)
-    └── install-config.env    # Install configuration template
+    ├── setup-vps-relay.sh    # emailrelay outbound relay for your VPS (port 25)
+    └── install-config.env    # Install configuration template (gitignored)
 ```
 
 ---
 
 ## Troubleshooting
+
+### Build fails with `open3: exec of rsync ... failed: No such file or directory`
+
+The packaging stage of zm-build uses `rsync` to stage the installer files, but
+older builder images didn't include it. Pull the latest code and rebuild the
+Docker image (the image build is fast — the long part is the zm-build run):
+
+```bash
+git pull
+./build.sh build --base-image ubuntu:24.04 --version 10.1.16
+```
+
+If you still hit it, rebuild the image with `--no-cache` to bypass a stale layer:
+
+```bash
+./build.sh build --no-cache
+```
+
+> **Tip:** run `./build.sh test` first as a pre-flight — it verifies all required
+tools (including `rsync`) are present inside the container before you commit to
+the long build. Note that the zm-build run always starts from scratch: the build
+container runs with `--rm` and only `./builds` (the installer output) is kept, so
+expect the full 2–6 hour run after a fix.
 
 ### Build fails with "No such branch"
 
@@ -286,12 +372,29 @@ Add resource limits in `docker-compose.yml` or use `--memory` flag:
 docker run --memory=8g ...
 ```
 
-### Permission denied on ./builds/
+### Deploy fails with `mkdir: cannot create directory ... Permission denied` (or `Permission denied on ./builds/`)
+
+The `./builds` output directory is bind-mounted into the container, but it was
+created by your host user (e.g. root) while the build runs as the container's
+`build` user (UID 1000). Current images auto-fix the mount ownership at
+container start, so `git pull` and rebuild the image:
+
+```bash
+git pull
+./build.sh build
+```
+
+Manual fallbacks (either one works):
 
 ```bash
 chmod 777 ./builds
 # Or set BUILD_UID/BUILD_GID in .env to match your user
 ```
+
+> **Note:** the auto-fix chowns `./builds` to the container's build UID (default
+> 1000) — bind mounts share the host directory's ownership. If your host user
+> has a different UID, set `BUILD_UID`/`BUILD_GID` in `.env` to match, or use
+> `sudo` to clean old artifacts.
 
 ### Docker daemon not running
 

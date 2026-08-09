@@ -39,7 +39,13 @@ DRY_RUN="${DRY_RUN:-false}"
 ZIMBRA_TGZ_PATH="${ZIMBRA_TGZ_PATH:-}"
 ZIMBRA_TGZ_URL="${ZIMBRA_TGZ_URL:-}"
 RELAY_ENABLED="${RELAY_ENABLED:-false}"
+RELAY_HOST="${RELAY_HOST:-}"
+RELAY_USER="${RELAY_USER:-}"
+RELAY_PASSWORD="${RELAY_PASSWORD:-}"
+RELAY_TLS_LEVEL="${RELAY_TLS_LEVEL:-may}"
 EMAILRELAY_ENABLED="${EMAILRELAY_ENABLED:-false}"
+EMAILRELAY_AUTH_USER="${EMAILRELAY_AUTH_USER:-}"
+EMAILRELAY_AUTH_PASSWORD="${EMAILRELAY_AUTH_PASSWORD:-}"
 ZEXTRAS_THEME_ENABLED="${ZEXTRAS_THEME_ENABLED:-false}"
 DISABLE_MODERN_UI="${DISABLE_MODERN_UI:-false}"
 SMTP_ALT_PORT="${SMTP_ALT_PORT:-}"
@@ -560,24 +566,45 @@ configure_relay() {
     
     header "Configuring Outbound Relay"
     
+    # If the ISP blocks outbound port 25, ALL outbound mail must go through an
+    # upstream smarthost on an open port (587 submission, 465 SMTPS, or a custom
+    # port to your own VPS relay). Zimbra's Postfix relays everything there and
+    # the smarthost delivers to the world on port 25.
+    #   RELAY_HOST="[smtp.gmail.com]:587"   # brackets = no MX lookup, exact host:port
+    #   RELAY_HOST="[vps.example.com]:587"  # your own VPS relay (see README)
+    if [ -z "${RELAY_HOST}" ]; then
+        warn "RELAY_HOST not set, skipping relay config"
+        return 0
+    fi
+    if [[ "${RELAY_HOST}" != *:* ]]; then
+        warn "RELAY_HOST '${RELAY_HOST}' has no port — Postfix would use port 25, which is what your ISP blocks. Use the [host]:587 style."
+    fi
     if [ -z "${RELAY_USER}" ] || [ -z "${RELAY_PASSWORD}" ]; then
         warn "RELAY_USER or RELAY_PASSWORD not set, skipping relay config"
         return 0
     fi
     
-    echo "${RELAY_HOST} ${RELAY_USER}:${RELAY_PASSWORD}" | \
+    # Credentials map (Postfix smtp_sasl_password_maps). Postfix strips the
+    # [brackets] when looking up the key, so store it WITHOUT them.
+    local relay_key="${RELAY_HOST//[\[\]]/}"
+    echo "${relay_key} ${RELAY_USER}:${RELAY_PASSWORD}" | \
         dry tee /opt/zimbra/conf/relay_password > /dev/null
-    
+    dry chown zimbra:zimbra /opt/zimbra/conf/relay_password
+    dry chmod 600 /opt/zimbra/conf/relay_password
     dry su - zimbra -c "postmap /opt/zimbra/conf/relay_password"
-    dry su - zimbra -c "zmprov ms \$(hostname) zimbraMtaRelayHost ${RELAY_HOST}"
-    dry su - zimbra -c "zmprov ms \$(hostname) zimbraMtaSmtpSaslAuthEnable yes"
-    dry su - zimbra -c "zmprov ms \$(hostname) zimbraMtaSmtpSaslSecurityOptions noanonymous"
-    dry su - zimbra -c "zmprov ms \$(hostname) zimbraMtaSmtpTlsSecurityLevel may"
-    dry su - zimbra -c "zmprov ms \$(hostname) zimbraMtaSmtpSaslPasswordMaps lmdb:/opt/zimbra/conf/relay_password"
-    dry su - zimbra -c "zmprov ms \$(hostname) zimbraMtaSmtpCnameOverridesServername yes"
-    dry su - zimbra -c 'postfix reload'
+    
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaRelayHost '${RELAY_HOST}'"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpSaslAuthEnable yes"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpSaslSecurityOptions noanonymous"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpTlsSecurityLevel ${RELAY_TLS_LEVEL:-may}"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpSaslPasswordMaps lmdb:/opt/zimbra/conf/relay_password"
+    # Must be 'no' for CNAME'd smarthosts (e.g. smtp.gmail.com): otherwise Postfix
+    # looks up credentials under the canonical CNAME and auth silently fails.
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpCnameOverridesServername no"
+    dry su - zimbra -c 'zmmtactl restart'
     
     log "Outbound relay configured: ${RELAY_HOST}"
+    log "NOTE: all outbound mail now goes through ${RELAY_HOST} — verify it can deliver (test send from a mailbox)."
 }
 
 # ═══════════════════════════════════════════════════════════
@@ -632,15 +659,18 @@ install_emailrelay() {
         dry mv emailrelay.pem /etc/ssl/certs/
     fi
     
-    # Config
+    # Config — STARTTLS (server-tls + server-tls-required) is the standard mode
+    # for port 587. (server-tls-connection would mean implicit TLS/SMTPS, which
+    # is unusual on 587.)
     dry tee /usr/etc/emailrelay.conf <<EOF
 as-proxy ${HOSTNAME}:${SMTP_ALT_PORT:-25}
 spool-dir /usr/var/spool/emailrelay
 remote-clients
 port 587
+server-tls
+server-tls-required
 server-auth /etc/emailrelay.auth
 server-tls-certificate /etc/ssl/certs/emailrelay.pem
-server-tls-connection
 EOF
     
     if [ -n "${EMAILRELAY_AUTH_USER}" ]; then

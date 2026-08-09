@@ -84,6 +84,7 @@ RUN set -ex; \
             python3 python3-dev python3-pip python3-venv \
             libaugeas0 libaugeas-dev \
             net-tools iproute2 dnsutils \
+            rsync \
             git-lfs \
             ; \
         rm -rf /var/lib/apt/lists/*; \
@@ -99,6 +100,7 @@ RUN set -ex; \
             python3 python3-devel python3-pip \
             augeas augeas-devel \
             net-tools iproute bind-utils \
+            rsync \
             git-lfs \
             ; \
         dnf clean all; \
@@ -114,6 +116,7 @@ RUN set -ex; \
             python3 python3-devel python3-pip \
             augeas augeas-devel \
             net-tools iproute bind-utils \
+            rsync \
             git-lfs \
             ; \
         yum clean all; \
