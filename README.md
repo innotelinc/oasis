@@ -102,9 +102,43 @@ cp .env.example .env   # edit with your preferences
 ./build.sh deploy root@mail.example.com ./builds/zcs-10.1.16_GA_*.UBUNTU24_64.*.tgz
 ```
 
+**Progress:** deploy runs in 4 phases with live output — `[1/4]` SSH check,
+`[2/4]` installer upload, `[3/4]` install-script upload, `[4/4]` remote install.
+Transfers show a progress bar (`pv` if installed, otherwise scp's native meter —
+`apt install pv` to get the bar), and the long install phase streams the
+server's output in real time with an animated spinner + elapsed-time line.
+
 > **Note:** edit `scripts/install-config.env` (hostname, domain, public IP, admin
 > passwords, and the relay settings from the port-25 section below) **before**
 > deploying — the installer reads it during setup.
+
+### How deploy authentication works
+
+`deploy` uses your normal SSH setup — it doesn't manage passwords itself. It
+connects as the user you give it (`root@host`), so make sure **your SSH public
+key** is installed on the server:
+
+```bash
+ssh-copy-id root@mail.example.com   # one-time; then deploys run passwordless
+```
+
+Control the connection via `.env` (or environment):
+
+```bash
+DEPLOY_SSH_KEY="~/.ssh/id_ed25519"      # specific key instead of the agent/default
+DEPLOY_SSH_PORT=2222                     # non-standard SSH port
+DEPLOY_SSH_OPTS="-o ConnectTimeout=15"  # extra ssh options
+```
+
+Details:
+- **SSH key / agent** → no password is ever asked (this is the "deploy without
+  a password" case).
+- **No key installed** → `scp`/`ssh` prompt for the password interactively.
+- **`root@host`** → the remote install already runs as root, so no sudo prompt.
+- **`user@host`** → you'll be prompted for the remote sudo password once (the
+  install phase runs `sudo bash install.sh`).
+- If the key is rejected you'll get a connection error telling you to run
+  `ssh-copy-id` or set `DEPLOY_SSH_KEY`/`DEPLOY_SSH_PORT`/`DEPLOY_SSH_OPTS`.
 
 ### Option B: Manual Install
 
