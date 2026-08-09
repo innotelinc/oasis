@@ -33,6 +33,12 @@ DOCKER_BUILD_OPTS="${DOCKER_BUILD_OPTS:-}"
 DOCKER_RUN_OPTS="${DOCKER_RUN_OPTS:-}"
 NO_CACHE="${NO_CACHE:-false}"
 
+# Deploy / SSH (set in .env or environment)
+DEPLOY_SSH_KEY="${DEPLOY_SSH_KEY:-}"      # path to private key, e.g. ~/.ssh/id_ed25519
+DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-}"    # SSH port if not 22
+DEPLOY_SSH_OPTS="${DEPLOY_SSH_OPTS:-}"    # extra ssh options, e.g. "-o ConnectTimeout=15"
+DEPLOY_SSH_ARGS=()
+
 # Load .env if present
 if [ -f .env ]; then
     set -a; source .env; set +a
@@ -87,7 +93,27 @@ check_prereqs() {
         exit 1
     fi
     
+    check_pv
     log "All prerequisites met"
+}
+
+# Warn if pv (the determinate upload progress bar) is missing, and show how to
+# install it. Non-fatal: transfers fall back to scp's built-in meter.
+check_pv() {
+    if command -v pv >/dev/null 2>&1; then
+        return 0
+    fi
+    warn "pv not found — uploads will fall back to scp's built-in meter."
+    warn "Install pv for the full transfer progress bar:"
+    if   command -v apt-get >/dev/null 2>&1; then warn "    sudo apt-get install pv"
+    elif command -v dnf     >/dev/null 2>&1; then warn "    sudo dnf install pv"
+    elif command -v yum     >/dev/null 2>&1; then warn "    sudo yum install pv"
+    elif command -v zypper  >/dev/null 2>&1; then warn "    sudo zypper install pv"
+    elif command -v pacman  >/dev/null 2>&1; then warn "    sudo pacman -S pv"
+    elif command -v apk     >/dev/null 2>&1; then warn "    sudo apk add pv"
+    elif command -v brew    >/dev/null 2>&1; then warn "    brew install pv"
+    else                                        warn "    install the 'pv' package with your system package manager"
+    fi
 }
 
 # ── Official Zimbra repo-based version resolution ─────────
@@ -334,69 +360,213 @@ do_test() {
     log "Container test passed"
 }
 
+# ── Deploy helpers ─────────────────────────────────────────
+# Builds the common ssh/scp option array (host-key, key, port, extra opts).
+deploy_ssh_args() {
+    DEPLOY_SSH_ARGS=(-o StrictHostKeyChecking=accept-new)
+    [ -n "${DEPLOY_SSH_PORT}" ] && DEPLOY_SSH_ARGS+=(-p "${DEPLOY_SSH_PORT}")
+    [ -n "${DEPLOY_SSH_KEY}" ] && DEPLOY_SSH_ARGS+=(-i "${DEPLOY_SSH_KEY}")
+    if [ -n "${DEPLOY_SSH_OPTS}" ]; then
+        local -a extra=()
+        read -r -a extra <<< "${DEPLOY_SSH_OPTS}"
+        DEPLOY_SSH_ARGS+=("${extra[@]}")
+    fi
+}
+
+# Human-readable size (B, KB, MB, ...)
+hr_size() {
+    local val="$1" u=0
+    local units=(B KB MB GB TB)
+    while [ "${val}" -ge 1024 ] && [ "${u}" -lt 4 ]; do
+        val=$((val / 1024)); u=$((u + 1))
+    done
+    printf '%s %s' "${val}" "${units[$u]}"
+}
+
+# Determinate-progress upload (pv bar if available, else scp's native meter)
+transfer_file() {
+    local src="$1" dest="$2" target="$3"
+    shift 3
+    local -a ssh_args=("$@")
+    local -a scp_args=()
+    local size a
+    size=$(stat -c%s "${src}" 2>/dev/null || stat -f%z "${src}" 2>/dev/null || printf '0')
+    log "  ⇪ $(basename "${src}")  ($(hr_size "${size}")) → ${target}:${dest}"
+    if command -v pv >/dev/null 2>&1 && [ "${size}" -gt 0 ]; then
+        pv -pterb -s "${size}" "${src}" | ssh "${ssh_args[@]}" "${target}" "cat > '${dest}'"
+    else
+        # scp uses -P for the port (ssh uses -p) — translate
+        for a in "${ssh_args[@]}"; do
+            if [ "${a}" = "-p" ]; then scp_args+=("-P"); else scp_args+=("${a}"); fi
+        done
+        scp "${scp_args[@]}" "${src}" "${target}:${dest}"
+    fi
+}
+
+# Runs "$@" (an ssh command) streaming its output to the terminal while
+# showing an animated progress line + elapsed time. Output is also captured to
+# a temp log. Returns the command's exit status.
+#
+# Incremental reading uses a byte offset + a "pending" buffer holding any
+# trailing partial line, so partially-written lines are never printed twice and
+# the final output is always flushed.
+run_stream() {
+    local logfile rc=0 pid line i=0 start secs elapsed animate=false
+    local off=0 pending=""
+    local spinner='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    [ -t 1 ] && animate=true
+    logfile=$(mktemp)
+    start=$(date +%s)
+
+    ( "$@" >"${logfile}" 2>&1 ) &
+    pid=$!
+
+    while :; do
+        # append newly-appended bytes since the last offset. Read byte-exactly
+        # (NUL-delimited read preserves trailing newlines) and advance the
+        # offset by the bytes ACTUALLY consumed, so no byte is ever skipped
+        # or duplicated, regardless of shell newline-stripping behavior.
+        local block="" start_off="${off}"
+        # `|| [ -n ]` keeps the final block: read returns EOF status when the
+        # NUL delimiter is never found, but still fills the variable.
+        while IFS= read -r -d '' block || [ -n "${block}" ]; do
+            off=$((off + $(printf '%s' "${block}" | wc -c)))
+            pending="${pending}${block}"
+        done < <(tail -c +$((start_off + 1)) "${logfile}" 2>/dev/null)
+
+        # emit every complete (newline-terminated) line, keeping only the
+        # trailing partial line buffered for the next pass. %%/*# split at the
+        # FIRST newline only, so partial lines are never printed prematurely.
+        while [[ "${pending}" == *$'\n'* ]]; do
+            line="${pending%%$'\n'*}"
+            pending="${pending#*$'\n'}"
+            line=${line%$'\r'}
+            if ${animate}; then
+                printf '\r\033[K%s\n' "${line}"
+            else
+                printf '%s\n' "${line}"
+            fi
+        done
+
+        if ${animate}; then
+            secs=$(( $(date +%s) - start ))
+            if [ "${secs}" -ge 3600 ]; then
+                elapsed=$(printf '%d:%02d:%02d' $((secs/3600)) $(((secs%3600)/60)) $((secs%60)))
+            else
+                elapsed=$(printf '%02d:%02d' $((secs/60)) $((secs%60)))
+            fi
+            printf '\r\033[K⏳ %s  %s elapsed' "${spinner:$i:1}" "${elapsed}"
+            i=$(( (i + 1) % ${#spinner} ))
+        fi
+
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+
+    # final incremental read, then flush whatever remains (partial final line)
+    local block="" start_off="${off}"
+    while IFS= read -r -d '' block || [ -n "${block}" ]; do
+        pending="${pending}${block}"
+    done < <(tail -c +$((start_off + 1)) "${logfile}" 2>/dev/null)
+    if [ -n "${pending}" ]; then
+        pending=${pending%$'\r'}
+        if ${animate}; then
+            printf '\r\033[K%s\n' "${pending}"
+        else
+            printf '%s\n' "${pending}"
+        fi
+    fi
+
+    wait "${pid}" 2>/dev/null
+    rc=$?
+
+    ${animate} && printf '\r\033[K'
+    echo ""
+    rm -f "${logfile}"
+    return "${rc}"
+}
+
 # ── Deploy to remote server ────────────────────────────────
 do_deploy() {
     local target="${1:-}"
     local tgz_file="${2:-}"
     local config_file="${3:-}"
-    
+    local -a ssh_args=()
+    local remote_tgz="" tty_flag="" ssh_err=""
+
     if [ -z "${target}" ]; then
         err "Deploy requires a target: ./build.sh deploy user@host"
         exit 1
     fi
-    
+
     header "Deploying to ${target}"
-    
+
+    deploy_ssh_args
+    ssh_args=("${DEPLOY_SSH_ARGS[@]}")
+    check_pv
+
     # Find the installer .tgz
     if [ -z "${tgz_file}" ]; then
         tgz_file=$(ls -t "${BUILD_DIR}"/zcs-*.tgz 2>/dev/null | head -1)
     fi
-    
+
     if [ -z "${tgz_file}" ] || [ ! -f "${tgz_file}" ]; then
         err "No Zimbra installer found: ${tgz_file:-${BUILD_DIR}/}"
         err "Run ./build.sh first, or specify: ./build.sh deploy user@host path/to/zcs-*.tgz (or --tgz)"
         exit 1
     fi
-    
+
     log "Installer: ${tgz_file}"
-    
-    # Copy installer to remote
-    log "Copying installer to ${target}:/usr/src/ ..."
-    scp "${tgz_file}" "${target}:/usr/src/" || {
-        err "SCP failed. Check SSH access to ${target}"
+    echo ""
+
+    # ── Phase 1: connectivity + remote dir ─────────────────
+    log "[1/4] Checking SSH access to ${target} ..."
+    if ! ssh_err=$(ssh "${ssh_args[@]}" "${target}" 'mkdir -p /usr/src' 2>&1); then
+        err "Cannot connect to ${target}."
+        if [ -n "${ssh_err}" ]; then
+            err "SSH said: $(printf '%s' "${ssh_err}" | head -1)"
+        fi
+        err "Install your SSH key first:"
+        err "    ssh-copy-id ${target}"
+        err "Or set DEPLOY_SSH_KEY / DEPLOY_SSH_PORT / DEPLOY_SSH_OPTS in .env."
         exit 1
-    }
-    
-    local remote_tgz="/usr/src/$(basename "${tgz_file}")"
-    
-    # Copy install scripts
-    log "Copying install scripts..."
-    scp "${SCRIPT_DIR}/scripts/install.sh" "${target}:/usr/src/install.sh"
-    scp "${SCRIPT_DIR}/scripts/install-config.env" "${target}:/usr/src/install-config.env" 2>/dev/null || true
-    
-    # Copy custom config if specified
-    if [ -n "${config_file}" ] && [ -f "${config_file}" ]; then
-        scp "${config_file}" "${target}:/usr/src/install-config.env"
     fi
-    
-    # Run the install
-    log "Running installer on ${target}..."
+    log "[1/4] ✓ SSH access OK"
+
+    # ── Phase 2: installer tgz (determinate progress) ───────
+    remote_tgz="/usr/src/$(basename "${tgz_file}")"
+    log "[2/4] Uploading installer ..."
+    transfer_file "${tgz_file}" "${remote_tgz}" "${target}" "${ssh_args[@]}"
+
+    # ── Phase 3: install scripts ────────────────────────────
+    log "[3/4] Uploading install scripts ..."
+    transfer_file "${SCRIPT_DIR}/scripts/install.sh" "/usr/src/install.sh" "${target}" "${ssh_args[@]}"
+    if [ -n "${config_file}" ] && [ -f "${config_file}" ]; then
+        transfer_file "${config_file}" "/usr/src/install-config.env" "${target}" "${ssh_args[@]}"
+    else
+        transfer_file "${SCRIPT_DIR}/scripts/install-config.env" "/usr/src/install-config.env" "${target}" "${ssh_args[@]}"
+    fi
+
+    # ── Phase 4: run the installer (live output + progress) ─
+    log "[4/4] Running installer on ${target} (15-45 min)..."
     echo ""
-    echo "  ┌─────────────────────────────────────────────┐"
-    echo "  │  Connecting to ${target}"
-    echo "  │  The install will take 15-45 minutes"
-    echo "  │  You'll be prompted for sudo password"
-    echo "  └─────────────────────────────────────────────┘"
-    echo ""
-    
-    ssh -t "${target}" "sudo bash /usr/src/install.sh --config /usr/src/install-config.env ${remote_tgz}" || {
+    if [[ "${target}" != root@* ]]; then
+        tty_flag="-t"
+        warn "Non-root target: you may be prompted for the remote sudo password."
+        warn "Run deploy from an interactive terminal — non-TTY runs cannot prompt for sudo."
+    fi
+    if ! run_stream ssh "${ssh_args[@]}" ${tty_flag:+"${tty_flag}"} "${target}" "sudo bash /usr/src/install.sh --config /usr/src/install-config.env ${remote_tgz}"; then
+        warn ""
         warn "Install script exited with error. Check output above."
         warn "You can re-run manually on the server:"
         warn "  ssh ${target}"
         warn "  sudo bash /usr/src/install.sh --config /usr/src/install-config.env ${remote_tgz}"
         exit 1
-    }
-    
+    fi
+
+    echo ""
     log "Deploy complete!"
     log "Zimbra is now running on ${target}"
 }
@@ -419,6 +589,11 @@ show_help() {
     echo "  --version VERSION    Zimbra version (default: latest)"
     echo "  --base-image IMAGE   Docker base image (default: ubuntu:22.04)"
     echo "  --output DIR         Output directory (default: ./builds)"
+    echo ""
+    echo "Deploy / SSH (env vars, see .env):"
+    echo "  DEPLOY_SSH_KEY       Path to an SSH private key, e.g. ~/.ssh/id_ed25519"
+    echo "  DEPLOY_SSH_PORT      SSH port if not 22"
+    echo "  DEPLOY_SSH_OPTS      Extra ssh options, e.g. \"-o ConnectTimeout=15\""
     echo ""
     echo "Examples:"
     echo "  ./build.sh                                    # Build latest for Ubuntu 22.04"
