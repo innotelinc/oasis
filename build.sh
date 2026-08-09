@@ -90,27 +90,39 @@ check_prereqs() {
     log "All prerequisites met"
 }
 
-# ── Wiki-based version resolution ─────────────────────────
-WIKI_URL="https://wiki.zimbra.com/wiki/Zimbra_Foss_Source_Code_Only_Releases"
+# ── Official Zimbra repo-based version resolution ─────────
+# The build clones zm-build from this repo, so its release tags are the
+# authoritative list of buildable FOSS versions (no wiki scraping).
+ZIMBRA_REPO="https://github.com/Zimbra/zm-build.git"
 
-# Fetch released versions from the Zimbra wiki
-# Returns versions sorted newest-first, one per line
+# Fetch released versions from the official Zimbra zm-build repo tags
+# Returns plain X.Y.Z FOSS release tags, sorted newest-first, one per line
 fetch_released_versions() {
-    curl -sL --max-time 15 "${WIKI_URL}" 2>/dev/null | \
-        awk '/^[0-9]+\.[0-9]+\.[0-9]+/{ver=$0; next} /^Released$/{print ver}' | \
-        sort -t. -k1,1nr -k2,2nr -k3,3nr
+    # `read -t` bounds each line, so a stalled network can't hang the picker
+    # (portable: macOS has no `timeout` command)
+    local line
+    while IFS= read -r -t 20 line; do
+        printf '%s\n' "${line#*refs/tags/}"
+    done < <(GIT_TERMINAL_PROMPT=0 git ls-remote --tags --refs "${ZIMBRA_REPO}" 2>/dev/null) | \
+        grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+        sort -t. -k1,1nr -k2,2nr -k3,3nr -u || true
 }
 
 # Resolve Zimbra version from wiki or explicit value
 resolve_version() {
     if [ "${ZIMBRA_VERSION}" = "latest" ]; then
         header "Resolving Latest Zimbra Version"
-        info "Source: ${WIKI_URL}"
+        info "Source: ${ZIMBRA_REPO}"
         
         local version
-        version=$(fetch_released_versions | head -1)
+        version=$(fetch_released_versions | head -1 || true)
         
-        ZIMBRA_VERSION="${version:-10.1.16}"
+        if [ -z "${version}" ]; then
+            warn "Could not determine latest version from ${ZIMBRA_REPO}, falling back to 10.1.16"
+            ZIMBRA_VERSION="10.1.16"
+        else
+            ZIMBRA_VERSION="${version}"
+        fi
         log "Latest released Zimbra FOSS version: ${ZIMBRA_VERSION}"
     fi
 }
@@ -118,13 +130,13 @@ resolve_version() {
 # Interactive version picker
 choose_version() {
     header "Select Zimbra Version"
-    info "Source: ${WIKI_URL}"
+    info "Source: ${ZIMBRA_REPO}"
     
     local versions
     mapfile -t versions < <(fetch_released_versions)
     
     if [ ${#versions[@]} -eq 0 ]; then
-        warn "Could not fetch versions from wiki, using 10.1.16"
+        warn "Could not fetch versions from the official Zimbra repo (${ZIMBRA_REPO}), using 10.1.16"
         ZIMBRA_VERSION="10.1.16"
         return
     fi
@@ -341,8 +353,8 @@ do_deploy() {
     fi
     
     if [ -z "${tgz_file}" ] || [ ! -f "${tgz_file}" ]; then
-        err "No Zimbra installer found in ${BUILD_DIR}/"
-        err "Run ./build.sh first, or specify: ./build.sh deploy user@host path/to/zcs-*.tgz"
+        err "No Zimbra installer found: ${tgz_file:-${BUILD_DIR}/}"
+        err "Run ./build.sh first, or specify: ./build.sh deploy user@host path/to/zcs-*.tgz (or --tgz)"
         exit 1
     fi
     
@@ -422,12 +434,23 @@ show_help() {
 }
 
 # ── Parse arguments ────────────────────────────────────────
+case "${1:-}" in
+    -h|--help|help) show_help; exit 0 ;;
+esac
+
+# A first argument that is a long option (e.g. --base-image ...) implies 'build'
 COMMAND="${1:-build}"
-shift 2>/dev/null || true
+if [[ "${COMMAND}" == --* ]]; then
+    COMMAND=build
+else
+    shift 2>/dev/null || true
+fi
 
 VERSION_EXPLICIT=false
 BASE_IMAGE_EXPLICIT=false
 
+# Parse global options; stop at the first positional argument (e.g. the
+# deploy target), which is left untouched for the command handler below.
 while [ $# -gt 0 ]; do
     case "$1" in
         --version)     ZIMBRA_VERSION="$2"; VERSION_EXPLICIT=true; shift 2 ;;
@@ -436,7 +459,7 @@ while [ $# -gt 0 ]; do
         --uid)         BUILD_UID="$2"; shift 2 ;;
         --gid)         BUILD_GID="$2"; shift 2 ;;
         --no-cache)    NO_CACHE=true; shift ;;
-        *)             warn "Unknown option: $1"; shift ;;
+        *)             break ;;
     esac
 done
 
@@ -477,13 +500,16 @@ case "${COMMAND}" in
         list_images
         ;;
     deploy)
-        local target="${1:-}"; shift
-        local tgz=""; local cfg=""
+        # NOTE: no `local` here — this runs at top level, not inside a function
+        target=""
+        tgz=""
+        cfg=""
         while [ $# -gt 0 ]; do
             case "$1" in
                 --config) cfg="$2"; shift 2 ;;
                 --tgz)    tgz="$2"; shift 2 ;;
-                *)        shift ;;
+                *)        if [ -z "${target}" ]; then target="$1";
+                           elif [ -z "${tgz}" ]; then tgz="$1"; fi; shift ;;
             esac
         done
         do_deploy "${target}" "${tgz}" "${cfg}"

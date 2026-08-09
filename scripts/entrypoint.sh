@@ -37,14 +37,22 @@ detect_os() {
     log "OS ID: ${OS_ID}, Version: ${OS_VERSION}"
 }
 
-# ── Wiki URL for version resolution ────────────────────────
-WIKI_URL="https://wiki.zimbra.com/wiki/Zimbra_Foss_Source_Code_Only_Releases"
+# ── Official Zimbra repo for version resolution ────────────
+# The build clones zm-build from this repo, so its release tags are the
+# authoritative list of buildable FOSS versions (no wiki scraping).
+ZIMBRA_REPO="https://github.com/Zimbra/zm-build.git"
 
-# Fetch released versions from the Zimbra wiki
+# Fetch released versions from the official Zimbra zm-build repo tags
+# Returns plain X.Y.Z FOSS release tags, sorted newest-first, one per line
 fetch_released_versions() {
-    curl -sL --max-time 15 "${WIKI_URL}" 2>/dev/null | \
-        awk '/^[0-9]+\.[0-9]+\.[0-9]+/{ver=$0; next} /^Released$/{print ver}' | \
-        sort -t. -k1,1nr -k2,2nr -k3,3nr
+    # `read -t` bounds each line, so a stalled network can't hang the picker
+    # (portable: macOS has no `timeout` command)
+    local line
+    while IFS= read -r -t 20 line; do
+        printf '%s\n' "${line#*refs/tags/}"
+    done < <(GIT_TERMINAL_PROMPT=0 git ls-remote --tags --refs "${ZIMBRA_REPO}" 2>/dev/null) | \
+        grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+        sort -t. -k1,1nr -k2,2nr -k3,3nr -u || true
 }
 
 # ── Resolve latest Zimbra version ──────────────────────────
@@ -52,14 +60,14 @@ resolve_version() {
     local requested="${1:-latest}"
 
     if [ "${requested}" = "latest" ]; then
-        log "Fetching latest released Zimbra FOSS version from wiki..."
-        log "  ${WIKI_URL}"
+        log "Fetching latest released Zimbra FOSS version from official repo..."
+        log "  ${ZIMBRA_REPO}"
         
         local version
-        version=$(fetch_released_versions | head -1)
+        version=$(fetch_released_versions | head -1 || true)
         
         if [ -z "${version}" ]; then
-            err "Could not determine latest version from wiki. Falling back to 10.1.16"
+            err "Could not determine latest version from ${ZIMBRA_REPO}. Falling back to 10.1.16"
             ZIMBRA_VERSION="10.1.16"
         else
             ZIMBRA_VERSION="${version}"
@@ -156,8 +164,14 @@ do_build() {
     
     # Create build directory — fix ownership in case Docker volume
     # mount created parent dirs as root-owned
+    local uid_gid="$(id -u):$(id -g)"
     sudo mkdir -p "${BUILD_DIR}"
-    sudo chown "$(id -u):$(id -g)" "${BUILD_DIR}"
+    sudo chown "${uid_gid}" "${BUILD_DIR}"
+    # The BUILDS dir is a bind mount from the host (./builds), whose
+    # ownership may not match this container's build user. Fix it so the
+    # Deploy phase can write archives/ and the .tgz into the mount.
+    sudo mkdir -p "${OUTPUT_DIR}"
+    sudo chown "${uid_gid}" "${OUTPUT_DIR}"
     cd "${BUILD_DIR}"
     
     # Clean any previous build artifacts
@@ -248,7 +262,7 @@ do_test() {
     
     # Check required tools
     local missing=()
-    for tool in git java ant maven gcc g++ make perl ruby; do
+    for tool in git java ant mvn gcc g++ make perl ruby rsync; do
         if ! command -v "${tool}" >/dev/null 2>&1; then
             missing+=("${tool}")
         fi
