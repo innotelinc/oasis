@@ -2,27 +2,31 @@
 set -euo pipefail
 
 # ┌──────────────────────────────────────────────────────────┐
-# │  Zimbra FOSS Builder — One-command build script          │
-# │  Builds Zimbra installer for any Linux OS via Docker     │
+# │  Zimbra FOSS Builder + Installer — One-command script    │
+# │  Builds the Zimbra installer for any Linux OS via Docker │
+# │  then installs it on the mail server.                    │
+# │                                                          │
+# │  Usage:                                                  │
+# │    ./build.sh                          # build + install│
+# │    ./build.sh build --skip-install     # build only      │
+# │    ./build.sh install [zcs-*.tgz]      # install only    │
+# │    ./build.sh deploy user@host         # remote install  │
 # └──────────────────────────────────────────────────────────┘
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 cd "${SCRIPT_DIR}"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 
 log()  { echo -e "${GREEN}[+]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[x]${NC} $*" >&2; }
 info() { echo -e "${BLUE}[i]${NC} $*"; }
 header() { echo -e "\n${BOLD}${BLUE}═══ $* ═══${NC}\n"; }
+dry()  { if [ "${DRY_RUN:-false}" = "true" ]; then info "[DRY-RUN] $*"; else "$@"; fi; }
 
-# ── Configuration (override via .env or environment) ───────
+# ── Build configuration (override via .env or environment) ─
 ZIMBRA_VERSION="${ZIMBRA_VERSION:-latest}"
 BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
 IMAGE_NAME="${IMAGE_NAME:-zimbra-builder}"
@@ -39,13 +43,55 @@ DEPLOY_SSH_PORT="${DEPLOY_SSH_PORT:-}"    # SSH port if not 22
 DEPLOY_SSH_OPTS="${DEPLOY_SSH_OPTS:-}"    # extra ssh options, e.g. "-o ConnectTimeout=15"
 DEPLOY_SSH_ARGS=()
 
+# ── Install configuration (override via .env, install-config.env, or CLI) ─
+HOSTNAME="${HOSTNAME:-mail.example.com}"
+DOMAIN="${DOMAIN:-example.com}"
+PUBLIC_IP="${PUBLIC_IP:-}"
+TIMEZONE="${TIMEZONE:-America/New_York}"
+ZIMBRA_ADMIN_PASSWORD="${ZIMBRA_ADMIN_PASSWORD:-}"
+ZIMBRA_LDAP_PASSWORD="${ZIMBRA_LDAP_PASSWORD:-${ZIMBRA_ADMIN_PASSWORD}}"
+LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-admin@example.com}"
+# Use ${SSL_DOMAINS:+x} rather than "${SSL_DOMAINS[@]:-}" or ${#SSL_DOMAINS[@]}
+# so this is safe under `set -u` even when the array was never declared
+# (older bash reports "SSL_DOMAINS: unbound variable" otherwise).
+if [ -z "${SSL_DOMAINS:+x}" ]; then SSL_DOMAINS=(mail.example.com); fi
+CREATE_SWAP="${CREATE_SWAP:-true}"
+SWAP_SIZE_MB="${SWAP_SIZE_MB:-1024}"
+DISABLE_IPV6="${DISABLE_IPV6:-true}"
+WEBMIN_ENABLED="${WEBMIN_ENABLED:-true}"
+DRY_RUN="${DRY_RUN:-false}"
+ZIMBRA_TGZ_PATH="${ZIMBRA_TGZ_PATH:-}"
+ZIMBRA_TGZ_URL="${ZIMBRA_TGZ_URL:-}"
+RELAY_ENABLED="${RELAY_ENABLED:-false}"
+RELAY_HOST="${RELAY_HOST:-}"
+RELAY_USER="${RELAY_USER:-}"
+RELAY_PASSWORD="${RELAY_PASSWORD:-}"
+RELAY_TLS_LEVEL="${RELAY_TLS_LEVEL:-may}"
+EMAILRELAY_ENABLED="${EMAILRELAY_ENABLED:-false}"
+EMAILRELAY_AUTH_USER="${EMAILRELAY_AUTH_USER:-}"
+EMAILRELAY_AUTH_PASSWORD="${EMAILRELAY_AUTH_PASSWORD:-}"
+ZEXTRAS_THEME_ENABLED="${ZEXTRAS_THEME_ENABLED:-false}"
+ZEXTRAS_THEME_URL="${ZEXTRAS_THEME_URL:-}"
+DISABLE_MODERN_UI="${DISABLE_MODERN_UI:-false}"
+SMTP_ALT_PORT="${SMTP_ALT_PORT:-}"
+MY_NETWORKS="${MY_NETWORKS:-}"
+SKIP_DEPS="${SKIP_DEPS:-false}"
+SKIP_SSL="${SKIP_SSL:-false}"
+SKIP_THEME="${SKIP_THEME:-false}"
+SKIP_RELAY="${SKIP_RELAY:-false}"
+SKIP_INSTALL="${SKIP_INSTALL:-false}"     # build-only mode (no auto-install)
+CONFIG_FILE="${CONFIG_FILE:-}"
+
 # Load .env if present
 if [ -f .env ]; then
     set -a; source .env; set +a
     info "Loaded configuration from .env"
 fi
 
-# ── Show banner ────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+#  BUILD SECTION
+# ═══════════════════════════════════════════════════════════
+
 banner() {
     echo ""
     echo -e "${BLUE}  ╔══════════════════════════════════════════════╗${NC}"
@@ -55,7 +101,7 @@ banner() {
     echo ""
 }
 
-# ── Detect OS for nice default ─────────────────────────────
+# Detect OS for nice default
 detect_host_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
@@ -63,7 +109,6 @@ detect_host_os() {
     fi
 }
 
-# ── Check prerequisites ────────────────────────────────────
 check_prereqs() {
     header "Checking Prerequisites"
     
@@ -229,7 +274,7 @@ choose_base_image() {
     fi
 }
 
-# ── Derive image tag from base image ───────────────────────
+# Derive image tag from base image
 image_tag() {
     local tag
     # Sanitize: rockylinux/rockylinux:9 → rockylinux-rockylinux-9
@@ -237,7 +282,6 @@ image_tag() {
     echo "${IMAGE_NAME}:${tag}-zimbra${ZIMBRA_VERSION}"
 }
 
-# ── Build the Docker image ─────────────────────────────────
 build_image() {
     header "Building Docker Image"
     
@@ -271,7 +315,6 @@ build_image() {
     log "Image built: ${tag}"
 }
 
-# ── Run the build ──────────────────────────────────────────
 run_build() {
     header "Building Zimbra ${ZIMBRA_VERSION}"
     
@@ -297,7 +340,6 @@ run_build() {
         --build
 }
 
-# ── Show info ──────────────────────────────────────────────
 show_info() {
     resolve_version
     
@@ -310,7 +352,6 @@ show_info() {
     echo ""
 }
 
-# ── Clean build artifacts ──────────────────────────────────
 do_clean() {
     header "Cleaning Build Artifacts"
     
@@ -330,7 +371,6 @@ do_clean() {
     log "Clean complete"
 }
 
-# ── List available base images ─────────────────────────────
 list_images() {
     echo ""
     echo "Available base images for --base-image:"
@@ -348,7 +388,6 @@ list_images() {
     echo ""
 }
 
-# ── Test the container ─────────────────────────────────────
 do_test() {
     header "Testing Build Container"
     
@@ -360,7 +399,10 @@ do_test() {
     log "Container test passed"
 }
 
-# ── Deploy helpers ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+#  DEPLOY SECTION
+# ═══════════════════════════════════════════════════════════
+
 # Builds the common ssh/scp option array (host-key, key, port, extra opts).
 deploy_ssh_args() {
     DEPLOY_SSH_ARGS=(-o StrictHostKeyChecking=accept-new)
@@ -488,7 +530,6 @@ run_stream() {
     return "${rc}"
 }
 
-# ── Deploy to remote server ────────────────────────────────
 do_deploy() {
     local target="${1:-}"
     local tgz_file="${2:-}"
@@ -509,7 +550,7 @@ do_deploy() {
 
     # Find the installer .tgz
     if [ -z "${tgz_file}" ]; then
-        tgz_file=$(ls -t "${BUILD_DIR}"/zcs-*.tgz 2>/dev/null | head -1)
+        tgz_file=$(ls -t "${BUILD_DIR}"/zcs-*.tgz 2>/dev/null | head -1) || true
     fi
 
     if [ -z "${tgz_file}" ] || [ ! -f "${tgz_file}" ]; then
@@ -540,13 +581,16 @@ do_deploy() {
     log "[2/4] Uploading installer ..."
     transfer_file "${tgz_file}" "${remote_tgz}" "${target}" "${ssh_args[@]}"
 
-    # ── Phase 3: install scripts ────────────────────────────
-    log "[3/4] Uploading install scripts ..."
-    transfer_file "${SCRIPT_DIR}/scripts/install.sh" "/usr/src/install.sh" "${target}" "${ssh_args[@]}"
+    # ── Phase 3: build.sh (merged builder + installer) ─────
+    log "[3/4] Uploading build script ..."
+    transfer_file "${SCRIPT_DIR}/build.sh" "/usr/src/build.sh" "${target}" "${ssh_args[@]}"
     if [ -n "${config_file}" ] && [ -f "${config_file}" ]; then
         transfer_file "${config_file}" "/usr/src/install-config.env" "${target}" "${ssh_args[@]}"
-    else
+    elif [ -f "${SCRIPT_DIR}/scripts/install-config.env" ]; then
         transfer_file "${SCRIPT_DIR}/scripts/install-config.env" "/usr/src/install-config.env" "${target}" "${ssh_args[@]}"
+    else
+        warn "No install config found — the remote install will run with defaults."
+        warn "Create scripts/install-config.env (see README) for a fully automatic install."
     fi
 
     # ── Phase 4: run the installer (live output + progress) ─
@@ -557,12 +601,12 @@ do_deploy() {
         warn "Non-root target: you may be prompted for the remote sudo password."
         warn "Run deploy from an interactive terminal — non-TTY runs cannot prompt for sudo."
     fi
-    if ! run_stream ssh "${ssh_args[@]}" ${tty_flag:+"${tty_flag}"} "${target}" "sudo bash /usr/src/install.sh --config /usr/src/install-config.env ${remote_tgz}"; then
+    if ! run_stream ssh "${ssh_args[@]}" ${tty_flag:+"${tty_flag}"} "${target}" "sudo bash /usr/src/build.sh install --config /usr/src/install-config.env ${remote_tgz}"; then
         warn ""
         warn "Install script exited with error. Check output above."
         warn "You can re-run manually on the server:"
         warn "  ssh ${target}"
-        warn "  sudo bash /usr/src/install.sh --config /usr/src/install-config.env ${remote_tgz}"
+        warn "  sudo bash /usr/src/build.sh install --config /usr/src/install-config.env ${remote_tgz}"
         exit 1
     fi
 
@@ -571,13 +615,715 @@ do_deploy() {
     log "Zimbra is now running on ${target}"
 }
 
-# ── Help ───────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+#  INSTALL SECTION  (runs on the mail server, as root)
+# ═══════════════════════════════════════════════════════════
+
+# Detect OS family (sets OS_ID, OS_FAMILY, PKG_MGR)
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS_ID="${ID}"
+        OS_VERSION_ID="${VERSION_ID}"
+        OS_CODENAME="${VERSION_CODENAME:-}"
+        OS_NAME="${PRETTY_NAME:-${ID} ${VERSION_ID}}"
+    elif [ -f /etc/redhat-release ]; then
+        OS_ID="rhel"
+        OS_VERSION_ID=$(rpm -q --qf "%{VERSION}" "$(rpm -q --whatprovides redhat-release)" 2>/dev/null || echo "8")
+        OS_NAME="$(cat /etc/redhat-release)"
+    else
+        err "Cannot detect OS"
+        exit 1
+    fi
+    
+    # Normalize OS family
+    case "${OS_ID}" in
+        ubuntu|debian) PKG_MGR="apt"; OS_FAMILY="debian" ;;
+        rocky|almalinux|rhel|centos|ol|oracle|fedora) PKG_MGR="dnf"; OS_FAMILY="rhel" ;;
+        *) err "Unsupported OS: ${OS_ID}"; exit 1 ;;
+    esac
+    
+    log "Detected: ${OS_NAME} (${OS_FAMILY}, ${PKG_MGR})"
+}
+
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        err "This script must be run as root"
+        exit 1
+    fi
+    if [ "${DRY_RUN}" = "true" ]; then
+        warn "DRY RUN MODE — no changes will be made"
+    fi
+}
+
+# Idempotency check
+check_already_installed() {
+    if [ -f /opt/zimbra/bin/zmcontrol ] || [ -f /opt/zimbra/.install_done ]; then
+        warn "Zimbra appears to be already installed"
+        ZIMBRA_ALREADY_INSTALLED=true
+        if [ "${FORCE_REINSTALL:-false}" = "true" ]; then
+            warn "FORCE_REINSTALL=true — re-installing"
+            ZIMBRA_ALREADY_INSTALLED=false
+        fi
+    fi
+}
+
+mark_installed() {
+    dry touch /opt/zimbra/.install_done
+}
+
+load_config() {
+    local cfg="${1:-}"
+    if [ -n "${cfg}" ] && [ -f "${cfg}" ]; then
+        log "Loading config: ${cfg}"
+        set -a; source "${cfg}"; set +a
+    fi
+}
+
+# ── Section 1: System Preparation ──────────────────────────
+
+install_deps() {
+    header "Installing Dependencies"
+    
+    if [ "${SKIP_DEPS}" = "true" ]; then
+        warn "Skipping dependency installation"
+        return 0
+    fi
+    
+    if [ "${PKG_MGR}" = "apt" ]; then
+        dry apt update
+        dry apt -y install gcc make g++ openssl libxml2-dev perl net-tools \
+            gnupg2 locate git software-properties-common openjdk-8-jdk \
+            ant ant-optional ruby maven build-essential rsyslog debhelper \
+            python3 python3-dev python3-venv libaugeas0 libaugeas-dev
+    elif [ "${PKG_MGR}" = "dnf" ]; then
+        dry dnf -y update
+        dry dnf -y install gcc gcc-c++ make openssl libxml2-devel perl \
+            net-tools gnupg2 mlocate git java-1.8.0-openjdk-devel ant \
+            ruby ruby-devel maven rsyslog python3 python3-devel \
+            augeas augeas-devel
+    fi
+    log "Dependencies installed"
+}
+
+remove_postfix() {
+    header "Removing Postfix"
+    
+    if systemctl is-active --quiet postfix 2>/dev/null; then
+        dry systemctl stop postfix
+    fi
+    
+    if [ "${PKG_MGR}" = "apt" ]; then
+        dry apt -y purge postfix 2>/dev/null || true
+    elif [ "${PKG_MGR}" = "dnf" ]; then
+        dry dnf -y remove postfix 2>/dev/null || true
+    fi
+    log "Postfix removed"
+}
+
+install_webmin() {
+    if [ "${WEBMIN_ENABLED}" != "true" ]; then return 0; fi
+    
+    header "Installing Webmin"
+    
+    if command -v webmin >/dev/null 2>&1; then
+        info "Webmin already installed"
+        return 0
+    fi
+    
+    cd /usr/src
+    dry wget -q https://www.webmin.com/download/deb/webmin-current.deb 2>/dev/null || {
+        warn "Could not download Webmin .deb, trying rpm..."
+        dry wget -q https://www.webmin.com/download/rpm/webmin-current.rpm 2>/dev/null || {
+            warn "Webmin download failed, skipping"
+            return 0
+        }
+        dry rpm -i webmin-current.rpm 2>/dev/null || true
+        return 0
+    }
+    dry dpkg -i webmin-current.deb 2>/dev/null || true
+    dry apt -fy install 2>/dev/null || true
+    log "Webmin installed (https://${HOSTNAME}:10000)"
+}
+
+set_hostname() {
+    header "Setting Hostname"
+    
+    local current
+    current=$(hostname)
+    if [ "${current}" != "${HOSTNAME}" ]; then
+        dry hostnamectl set-hostname "${HOSTNAME}" --static
+    fi
+    log "Hostname: ${HOSTNAME}"
+}
+
+configure_hosts() {
+    header "Configuring /etc/hosts"
+    
+    if ! grep -q "${HOSTNAME}" /etc/hosts 2>/dev/null; then
+        local entry="127.0.0.1 localhost.localdomain localhost\n::1 localhost.localdomain localhost ip6-localhost ip6-loopback"
+        if [ -n "${PUBLIC_IP}" ]; then
+            entry="${entry}\n${PUBLIC_IP} ${HOSTNAME} $(echo ${HOSTNAME} | cut -d. -f1)"
+        fi
+        dry bash -c "echo -e '${entry}' > /etc/hosts"
+    fi
+    log "Hosts file configured"
+}
+
+disable_ipv6() {
+    if [ "${DISABLE_IPV6}" != "true" ]; then return 0; fi
+    
+    header "Disabling IPv6"
+    
+    if ! grep -q "net.ipv6.conf.all.disable_ipv6" /etc/sysctl.conf 2>/dev/null; then
+        dry tee -a /etc/sysctl.conf <<'EOF'
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+        dry sysctl -p 2>/dev/null || warn "Could not apply sysctl (container?)"
+    fi
+    log "IPv6 disabled"
+}
+
+disable_firewall() {
+    header "Disabling Firewalls"
+    
+    for svc in ufw iptables ip6tables firewalld; do
+        if systemctl is-active --quiet "${svc}" 2>/dev/null; then
+            dry systemctl stop "${svc}" 2>/dev/null || true
+            dry systemctl disable "${svc}" 2>/dev/null || true
+        fi
+    done
+    dry iptables -F 2>/dev/null || true
+    log "Firewalls disabled"
+}
+
+# ── Section 2: Zimbra Installation ─────────────────────────
+
+install_zimbra() {
+    header "Installing Zimbra"
+    
+    if [ "${ZIMBRA_ALREADY_INSTALLED:-false}" = "true" ]; then
+        info "Zimbra already installed, skipping installation."
+        return 0
+    fi
+    
+    local tgz_path="${1:-${ZIMBRA_TGZ_PATH}}"
+    local tgz_url="${ZIMBRA_TGZ_URL}"
+    
+    # Resolve the .tgz
+    if [ -z "${tgz_path}" ] && [ -n "${tgz_url}" ]; then
+        log "Downloading Zimbra from ${tgz_url}..."
+        cd /usr/src
+        dry wget -q "${tgz_url}" -O zimbra-install.tgz
+        tgz_path="/usr/src/zimbra-install.tgz"
+    fi
+    
+    if [ -z "${tgz_path}" ] || [ ! -f "${tgz_path}" ]; then
+        err "No Zimbra installer found. Provide a .tgz file, --url, or run the build first."
+        err "Usage: $0 install [path/to/zcs-*.tgz]"
+        exit 1
+    fi
+    
+    log "Using installer: ${tgz_path}"
+    
+    # Extract
+    cd /usr/src
+    local zdir
+    # `|| true`: tar tzf can fail on a truncated download; empty zdir is
+    # handled below so it can never point the rm at /usr/src itself.
+    zdir=$(tar tzf "${tgz_path}" 2>/dev/null | head -1 | cut -d/ -f1) || true
+    
+    if [ "${DRY_RUN}" = "true" ]; then
+        info "[DRY-RUN] Would extract ${tgz_path} and run the Zimbra installer"
+        return 0
+    fi
+    
+    if [ -z "${zdir}" ]; then
+        err "Could not read installer archive: ${tgz_path}"
+        err "The .tgz may be corrupt or truncated — re-download it and try again."
+        exit 1
+    fi
+    
+    if [ -d "/usr/src/${zdir}" ]; then
+        dry rm -rf "/usr/src/${zdir}"
+    fi
+    
+    dry tar zxf "${tgz_path}"
+    cd "/usr/src/${zdir}"
+    
+    # Non-interactive install using config file piped to stdin
+    log "Running Zimbra installer (non-interactive)..."
+    log "This will take 10-30 minutes..."
+    
+    if [ -n "${ZIMBRA_ADMIN_PASSWORD}" ]; then
+        # Create auto-install config
+        local cfg="/tmp/zimbra_install_config"
+        cat > "${cfg}" <<EOF
+AVDOMAIN="${DOMAIN}"
+CREATEADMIN="admin@${DOMAIN}"
+CREATEADMINPASS="${ZIMBRA_ADMIN_PASSWORD}"
+CREATEDOMAIN="${DOMAIN}"
+DOTIMESTAMP="yes"
+HOSTNAME="${HOSTNAME}"
+INSTALL_PACKAGES="zimbra-core zimbra-ldap zimbra-logger zimbra-mta zimbra-dnscache zimbra-snmp zimbra-store zimbra-apache zimbra-spell zimbra-memcached zimbra-proxy zimbra-drive zimbra-imapd zimbra-patch"
+LDAPHOST="${HOSTNAME}"
+LDAPPORT=389
+LDAPROOTPW="${ZIMBRA_LDAP_PASSWORD:-${ZIMBRA_ADMIN_PASSWORD}}"
+INSTALL_WEBAPPS="service zimlet zimbra zimbraAdmin"
+REMOVE="no"
+RUNAV="yes"
+RUNSA="yes"
+SMTPDEST="admin@${DOMAIN}"
+SMTPHOST="${HOSTNAME}"
+SMTPNOTIFY="yes"
+SMTPSOURCE="admin@${DOMAIN}"
+SNMPNOTIFY="yes"
+SNMPTRAPHOST="${HOSTNAME}"
+STARTSERVERS="yes"
+SYSTEMMEMORY="auto"
+TRAINSA="yes"
+UPGRADE="yes"
+USESPELL="yes"
+VERSIONUPDATECHECKS="TRUE"
+VIRUSQUARANTINE="admin@${DOMAIN}"
+ZIMBRA_REQ_SECURITY="yes"
+EOF
+        # Run installer with config piped via stdin
+        ./install.sh < "${cfg}"
+        rm -f "${cfg}"
+    else
+        ./install.sh
+    fi
+    
+    log "Zimbra installed"
+}
+
+# ── Section 3: Post-Install Configuration ──────────────────
+
+configure_zimbra() {
+    header "Configuring Zimbra"
+    
+    dry su - zimbra -c "zmlocalconfig -e zimbra_zmprov_default_to_ldap=true"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraReverseProxyMailMode redirect"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaLmtpHostLookup native"
+    dry su - zimbra -c "zmprov mcf zimbraMtaLmtpHostLookup native"
+    dry su - zimbra -c "zmmtactl restart"
+    dry su - zimbra -c "zmproxyctl restart"
+    
+    # Disable modern UI if requested
+    if [ "${DISABLE_MODERN_UI}" = "true" ]; then
+        disable_modern_ui
+    fi
+    
+    log "Zimbra configured"
+}
+
+disable_modern_ui() {
+    log "Disabling Modern UI..."
+    
+    local msg_file="/opt/zimbra/jetty_base/webapps/zimbra/WEB-INF/classes/messages/ZmMsg.properties"
+    local jsp_file="/opt/zimbra/jetty_base/webapps/zimbra/public/login.jsp"
+    
+    if [ -f "${msg_file}" ]; then
+        dry sed -i 's/^clientAdvanced = .*/clientAdvanced = Default/' "${msg_file}"
+        dry sed -i 's/^clientPreferred = .*/clientPreferred =/' "${msg_file}"
+        dry sed -i 's/^clientModern = .*/clientModern =/' "${msg_file}"
+    fi
+    
+    if [ -f "${jsp_file}" ]; then
+        dry sed -i '/<option value="preferred"/,+3d' "${jsp_file}"
+        dry sed -i '/<option value="modern"/,+3d' "${jsp_file}"
+    fi
+    
+    dry su - zimbra -c 'zmmailboxdctl restart'
+    log "Modern UI disabled"
+}
+
+configure_amavis() {
+    header "Configuring Amavis"
+    
+    local amavis_conf="/opt/zimbra/conf/amavisd.conf.in"
+    if [ -f "${amavis_conf}" ]; then
+        if ! grep -q '10024,10026' "${amavis_conf}" 2>/dev/null; then
+            dry sed -i 's/\$inet_socket_port = \[10024\];/\$inet_socket_port = [10024,10026];/' "${amavis_conf}"
+        fi
+        if ! grep -q "${HOSTNAME}" "${amavis_conf}" 2>/dev/null; then
+            dry sed -i "s/\$myhostname = .*/\$myhostname = '${HOSTNAME}';/" "${amavis_conf}"
+        fi
+    fi
+    log "Amavis configured"
+}
+
+configure_spamassassin() {
+    header "Updating SpamAssassin"
+    
+    cd /usr/src
+    dry wget -q https://spamassassin.apache.org/updates/GPG.KEY -O /tmp/sa-gpg.key 2>/dev/null || {
+        warn "Could not download SpamAssassin GPG key"
+        return 0
+    }
+    dry su - zimbra -c "sa-update --import /tmp/sa-gpg.key" 2>/dev/null || true
+    dry su - zimbra -c "/opt/zimbra/common/bin/sa-update -D" 2>/dev/null || true
+    log "SpamAssassin updated"
+}
+
+configure_smtp_port() {
+    if [ -z "${SMTP_ALT_PORT}" ]; then return 0; fi
+    
+    header "Configuring Alt SMTP Port (${SMTP_ALT_PORT})"
+    
+    local master_cf="/opt/zimbra/common/conf/master.cf.in"
+    if [ -f "${master_cf}" ] && ! grep -q "^${SMTP_ALT_PORT}" "${master_cf}" 2>/dev/null; then
+        dry sed -i "/^smtp.*inet.*postscreen/a ${SMTP_ALT_PORT}      inet  n       -       y       -       -       smtpd" "${master_cf}"
+    fi
+    
+    local my_networks="127.0.0.0/8 [::1]/128 ${MY_NETWORKS}"
+    dry su - zimbra -c "zmprov ms ${HOSTNAME} zimbraMtaMyNetworks '${my_networks}'"
+    dry su - zimbra -c "zmprov mcf zimbraSmtpPort ${SMTP_ALT_PORT}"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraSmtpPort ${SMTP_ALT_PORT}"
+    dry su - zimbra -c 'postfix reload'
+    dry su - zimbra -c 'zmcontrol restart'
+    log "SMTP port set to ${SMTP_ALT_PORT}"
+}
+
+# ── Section 4: SSL / Let's Encrypt ─────────────────────────
+
+setup_letsencrypt() {
+    if [ "${SKIP_SSL}" = "true" ]; then return 0; fi
+    
+    header "Setting up Let's Encrypt SSL"
+    
+    # Install certbot via python venv (most portable)
+    cd /usr/src
+    if ! command -v certbot >/dev/null 2>&1; then
+        log "Installing certbot..."
+        dry apt update 2>/dev/null || true
+        dry apt -y install python3 python3-dev python3-venv libaugeas0 libaugeas-dev 2>/dev/null || true
+        
+        dry python3 -m venv /opt/certbot/
+        dry /opt/certbot/bin/pip install --upgrade pip 2>/dev/null || true
+        dry /opt/certbot/bin/pip install certbot 2>/dev/null || true
+        dry ln -sf /opt/certbot/bin/certbot /usr/bin/certbot
+    fi
+    
+    # Stop Zimbra services that use port 80/443
+    dry su - zimbra -c 'zmproxyctl stop' 2>/dev/null || true
+    dry su - zimbra -c 'zmmailboxdctl stop' 2>/dev/null || true
+    
+    # Build domain list
+    local domain_args=""
+    for d in "${SSL_DOMAINS[@]}"; do
+        domain_args="${domain_args} -d ${d}"
+    done
+    
+    # Request certificate
+    log "Requesting certificate for: ${SSL_DOMAINS[*]}"
+    dry certbot certonly --agree-tos -m "${LETSENCRYPT_EMAIL}" \
+        --key-type rsa --preferred-chain "ISRG Root X1" \
+        --standalone ${domain_args} -n 2>/dev/null || {
+        warn "certbot failed — check DNS points to this server"
+        return 1
+    }
+    
+    # Add ISRG Root
+    local cert_dir="/etc/letsencrypt/live/${SSL_DOMAINS[0]}"
+    dry wget -q --no-check-certificate -O /tmp/ISRG-X1.pem \
+        https://letsencrypt.org/certs/isrgrootx1.pem.txt 2>/dev/null
+    dry cat /tmp/ISRG-X1.pem >> "${cert_dir}/fullchain.pem" 2>/dev/null || true
+    
+    # Copy to Zimbra
+    dry mkdir -p /opt/zimbra/ssl/letsencrypt
+    dry cp "${cert_dir}/"* /opt/zimbra/ssl/letsencrypt/
+    dry chown zimbra:zimbra /opt/zimbra/ssl/letsencrypt/*
+    
+    log "SSL certificate obtained"
+}
+
+deploy_ssl() {
+    if [ "${SKIP_SSL}" = "true" ]; then return 0; fi
+    
+    header "Deploying SSL Certificate"
+    
+    cd /opt/zimbra/ssl/letsencrypt
+    
+    # Verify
+    dry su - zimbra -c "cd /opt/zimbra/ssl/letsencrypt && /opt/zimbra/bin/zmcertmgr verifycrt comm privkey.pem cert.pem fullchain.pem"
+    
+    # Backup existing
+    dry cp -a /opt/zimbra/ssl/zimbra "/opt/zimbra/ssl/zimbra.$(date +%Y%m%d)" 2>/dev/null || true
+    
+    # Create commercial key
+    dry cp /opt/zimbra/ssl/letsencrypt/privkey.pem /opt/zimbra/ssl/zimbra/commercial/commercial.key 2>/dev/null || true
+    
+    # Deploy
+    dry su - zimbra -c "cd /opt/zimbra/ssl/letsencrypt && /opt/zimbra/bin/zmcertmgr deploycrt comm cert.pem fullchain.pem"
+    
+    # Restart services
+    dry su - zimbra -c 'zmproxyctl start'
+    dry su - zimbra -c 'zmmailboxdctl start'
+    
+    # Renewal cron
+    if ! grep -q "certbot renew" /etc/crontab 2>/dev/null; then
+        echo "0 0,12 * * * root python3 -c 'import random; import time; time.sleep(random.random() * 3600)' && certbot renew --force-renewal --preferred-chain \"ISRG Root X1\"" | dry tee -a /etc/crontab > /dev/null
+    fi
+    
+    log "SSL deployed"
+}
+
+# ── Section 5: Outbound Relay ──────────────────────────────
+
+configure_relay() {
+    if [ "${RELAY_ENABLED}" != "true" ] || [ "${SKIP_RELAY}" = "true" ]; then return 0; fi
+    
+    header "Configuring Outbound Relay"
+    
+    # If the ISP blocks outbound port 25, ALL outbound mail must go through an
+    # upstream smarthost on an open port (587 submission, 465 SMTPS, or a custom
+    # port to your own VPS relay). Zimbra's Postfix relays everything there and
+    # the smarthost delivers to the world on port 25.
+    #   RELAY_HOST="[smtp.gmail.com]:587"   # brackets = no MX lookup, exact host:port
+    #   RELAY_HOST="[vps.example.com]:587"  # your own VPS relay (see README)
+    if [ -z "${RELAY_HOST}" ]; then
+        warn "RELAY_HOST not set, skipping relay config"
+        return 0
+    fi
+    if [[ "${RELAY_HOST}" != *:* ]]; then
+        warn "RELAY_HOST '${RELAY_HOST}' has no port — Postfix would use port 25, which is what your ISP blocks. Use the [host]:587 style."
+    fi
+    if [ -z "${RELAY_USER}" ] || [ -z "${RELAY_PASSWORD}" ]; then
+        warn "RELAY_USER or RELAY_PASSWORD not set, skipping relay config"
+        return 0
+    fi
+    
+    # Credentials map (Postfix smtp_sasl_password_maps). Postfix strips the
+    # [brackets] when looking up the key, so store it WITHOUT them.
+    local relay_key="${RELAY_HOST//[\[\]]/}"
+    echo "${relay_key} ${RELAY_USER}:${RELAY_PASSWORD}" | \
+        dry tee /opt/zimbra/conf/relay_password > /dev/null
+    dry chown zimbra:zimbra /opt/zimbra/conf/relay_password
+    dry chmod 600 /opt/zimbra/conf/relay_password
+    dry su - zimbra -c "postmap /opt/zimbra/conf/relay_password"
+    
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaRelayHost '${RELAY_HOST}'"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpSaslAuthEnable yes"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpSaslSecurityOptions noanonymous"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpTlsSecurityLevel ${RELAY_TLS_LEVEL:-may}"
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpSaslPasswordMaps lmdb:/opt/zimbra/conf/relay_password"
+    # Must be 'no' for CNAME'd smarthosts (e.g. smtp.gmail.com): otherwise Postfix
+    # looks up credentials under the canonical CNAME and auth silently fails.
+    dry su - zimbra -c "zmprov ms \$(zmhostname) zimbraMtaSmtpCnameOverridesServername no"
+    dry su - zimbra -c 'zmmtactl restart'
+    
+    log "Outbound relay configured: ${RELAY_HOST}"
+    log "NOTE: all outbound mail now goes through ${RELAY_HOST} — verify it can deliver (test send from a mailbox)."
+}
+
+# ── Section 6: Zextras Theme ───────────────────────────────
+
+install_theme() {
+    if [ "${ZEXTRAS_THEME_ENABLED}" != "true" ] || [ "${SKIP_THEME}" = "true" ]; then return 0; fi
+    
+    header "Installing Zextras Theme"
+    
+    cd /usr/src
+    dry wget -q "${ZEXTRAS_THEME_URL}" -O zextras-theme.tgz 2>/dev/null || {
+        warn "Could not download Zextras theme"
+        return 0
+    }
+    dry tar xf zextras-theme.tgz
+    cd zextras-theme-installer 2>/dev/null || cd zextras* 2>/dev/null || return 0
+    
+    dry dpkg -i packages/zextras-theme_*_amd64.deb 2>/dev/null || true
+    dry su - zimbra -c 'zmskindeploy /opt/zimbra/jetty/webapps/zimbra/skins/zextras/' 2>/dev/null || true
+    dry su - zimbra -c 'zmmailboxdctl restart'
+    
+    log "Zextras theme installed"
+}
+
+# ── Section 7: Email Relay (for ISP multi-server) ──────────
+
+install_emailrelay() {
+    if [ "${EMAILRELAY_ENABLED}" != "true" ]; then return 0; fi
+    
+    header "Installing Email Relay"
+    
+    cd /usr/src
+    if [ ! -d emailrelay ]; then
+        dry git clone https://github.com/innotelinc/emailrelay.git
+    fi
+    
+    cd emailrelay
+    dry ./configure --prefix=/usr --with-openssl=/usr/bin/openssl && dry make && dry make install
+    dry systemctl enable /usr/src/emailrelay/etc/emailrelay.service 2>/dev/null || true
+    
+    # Generate TLS cert
+    if [ ! -f /etc/ssl/certs/emailrelay.pem ]; then
+        dry openssl req -newkey rsa:2048 -nodes -keyout emailrelay.key \
+            -x509 -days 365 -out emailrelay.crt \
+            -subj "/CN=${HOSTNAME}" 2>/dev/null
+        dry cat emailrelay.key emailrelay.crt > emailrelay.pem
+        dry chmod 600 emailrelay.pem
+        dry mv emailrelay.pem /etc/ssl/certs/
+    fi
+    
+    # Config — STARTTLS (server-tls + server-tls-required) is the standard mode
+    # for port 587. (server-tls-connection would mean implicit TLS/SMTPS, which
+    # is unusual on 587.)
+    dry tee /usr/etc/emailrelay.conf <<EOF
+as-proxy ${HOSTNAME}:${SMTP_ALT_PORT:-25}
+spool-dir /usr/var/spool/emailrelay
+remote-clients
+port 587
+server-tls
+server-tls-required
+server-auth /etc/emailrelay.auth
+server-tls-certificate /etc/ssl/certs/emailrelay.pem
+EOF
+    
+    if [ -n "${EMAILRELAY_AUTH_USER}" ]; then
+        echo "server plain ${EMAILRELAY_AUTH_USER} ${EMAILRELAY_AUTH_PASSWORD}" | \
+            dry tee /etc/emailrelay.auth > /dev/null
+        dry chmod 600 /etc/emailrelay.auth
+    fi
+    
+    dry systemctl start emailrelay
+    log "Email relay installed"
+}
+
+# ── Section 8: Swap ────────────────────────────────────────
+
+create_swap() {
+    if [ "${CREATE_SWAP}" != "true" ]; then return 0; fi
+    
+    header "Creating Swap (${SWAP_SIZE_MB}MB)"
+    
+    if [ -f /opt/zimbra/swap ]; then
+        info "Swap already exists"
+        return 0
+    fi
+    
+    dry dd if=/dev/zero of=/opt/zimbra/swap bs=1M count="${SWAP_SIZE_MB}" 2>/dev/null
+    dry chmod 600 /opt/zimbra/swap
+    dry mkswap /opt/zimbra/swap
+    dry swapon /opt/zimbra/swap
+    
+    log "Swap created"
+}
+
+# ── Section 9: Snap Loop Fix ───────────────────────────────
+
+fix_snap_loops() {
+    header "Fixing Snap Loop Reports"
+    
+    local loop_devices
+    # `|| true`: with pipefail, grep exits 1 when there are no loop devices,
+    # which would otherwise abort the whole install under `set -e`.
+    loop_devices=$(df -Th 2>/dev/null | grep '/dev/loop' | awk '{print ":"$1}' | tr -d '\n' | sed 's/^://') || true
+    
+    if [ -n "${loop_devices}" ]; then
+        dry su - zimbra -c "zmlocalconfig -e zmstat_df_excludes='${loop_devices}'"
+        dry su - zimbra -c 'zmstatctl restart'
+        log "Snap loops excluded"
+    fi
+}
+
+# ── Section 10: Final Cleanup & Restart ────────────────────
+
+finalize() {
+    header "Finalizing"
+    
+    # Clean stale PIDs
+    dry rm -f /opt/zimbra/log/*.pid 2>/dev/null || true
+    
+    # Mark installed
+    mark_installed
+    
+    # Autoremove
+    if [ "${PKG_MGR}" = "apt" ]; then
+        dry apt -y autoremove 2>/dev/null || true
+    elif [ "${PKG_MGR}" = "dnf" ]; then
+        dry dnf -y autoremove 2>/dev/null || true
+    fi
+    
+    # Restart Zimbra
+    dry su - zimbra -c 'zmcontrol restart'
+    
+    log "Installation complete!"
+    log "============================================"
+    log "  Admin URL:  https://${HOSTNAME}:7071"
+    log "  Webmail:    https://${HOSTNAME}"
+    if [ "${WEBMIN_ENABLED}" = "true" ]; then
+        log "  Webmin:     https://${HOSTNAME}:10000"
+    fi
+    log "============================================"
+}
+
+# ── Install orchestrator ───────────────────────────────────
+run_install() {
+    local tgz="${1:-}"
+    local cfg="${CONFIG_FILE:-}"
+    
+    # Banner
+    echo -e "\n${BLUE}${BOLD}  ╔══════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}${BOLD}  ║${NC}     ${BOLD}Zimbra FOSS — Universal Installer${NC}       ${BLUE}${BOLD}║${NC}"
+    echo -e "${BLUE}${BOLD}  ╚══════════════════════════════════════════╝${NC}\n"
+    
+    detect_os
+    check_root
+    # Load config after the root check so a non-root run fails before
+    # sourcing the (password-bearing) config file.
+    if [ -z "${cfg}" ] && [ -f "${SCRIPT_DIR}/scripts/install-config.env" ]; then
+        cfg="${SCRIPT_DIR}/scripts/install-config.env"
+    fi
+    load_config "${cfg}"
+    check_already_installed
+    
+    # Resolve installer .tgz: explicit arg > ZIMBRA_TGZ_PATH > newest build
+    if [ -z "${tgz}" ]; then
+        tgz="${ZIMBRA_TGZ_PATH:-}"
+    fi
+    if [ -z "${tgz}" ]; then
+        tgz=$(ls -t "${BUILD_DIR}"/zcs-*.tgz 2>/dev/null | head -1 || true)
+        if [ -n "${tgz}" ]; then
+            log "Using newest build: ${tgz}"
+        fi
+    fi
+    
+    install_deps
+    remove_postfix
+    install_webmin
+    set_hostname
+    configure_hosts
+    disable_ipv6
+    disable_firewall
+    install_zimbra "${tgz}"
+    configure_zimbra
+    configure_amavis
+    configure_spamassassin
+    configure_smtp_port
+    setup_letsencrypt
+    deploy_ssl
+    configure_relay
+    install_theme
+    install_emailrelay
+    create_swap
+    fix_snap_loops
+    finalize
+}
+
+# ═══════════════════════════════════════════════════════════
+#  HELP
+# ═══════════════════════════════════════════════════════════
+
 show_help() {
     banner
     echo "Usage: ./build.sh [COMMAND] [OPTIONS]"
     echo ""
     echo "Commands:"
     echo "  build       Build Zimbra FOSS installer (default)"
+    echo "  install     Install Zimbra on this server (after a build, or standalone)"
     echo "  deploy      Deploy installer to remote server via SSH"
     echo "  info        Show build configuration"
     echo "  clean       Remove build artifacts and images"
@@ -585,10 +1331,26 @@ show_help() {
     echo "  list        List available base OS images"
     echo "  help        Show this help"
     echo ""
-    echo "Options (can also be set in .env file):"
+    echo "The default 'build' command also installs on this server when run as"
+    echo "root. Use --skip-install to build only."
+    echo ""
+    echo "Build options (can also be set in .env file):"
     echo "  --version VERSION    Zimbra version (default: latest)"
     echo "  --base-image IMAGE   Docker base image (default: ubuntu:22.04)"
     echo "  --output DIR         Output directory (default: ./builds)"
+    echo "  --skip-install       Build only, do not install afterwards"
+    echo ""
+    echo "Install options:"
+    echo "  --config FILE        Install configuration file (default: scripts/install-config.env)"
+    echo "  --dry-run            Show what would be done, don't do it"
+    echo "  --skip-deps          Skip dependency installation"
+    echo "  --skip-ssl           Skip SSL certificate setup"
+    echo "  --skip-theme         Skip theme installation"
+    echo "  --skip-relay         Skip relay configuration"
+    echo "  --hostname NAME      Set server hostname"
+    echo "  --domain NAME        Set email domain"
+    echo "  --admin-pass PASS    Set admin password"
+    echo "  --force              Re-install even if Zimbra is already installed"
     echo ""
     echo "Deploy / SSH (env vars, see .env):"
     echo "  DEPLOY_SSH_KEY       Path to an SSH private key, e.g. ~/.ssh/id_ed25519"
@@ -596,19 +1358,45 @@ show_help() {
     echo "  DEPLOY_SSH_OPTS      Extra ssh options, e.g. \"-o ConnectTimeout=15\""
     echo ""
     echo "Examples:"
-    echo "  ./build.sh                                    # Build latest for Ubuntu 22.04"
+    echo "  ./build.sh                                    # Build latest + install here (as root)"
+    echo "  ./build.sh build --skip-install               # Build only"
+    echo "  ./build.sh install ./builds/zcs-*.tgz         # Install a specific build"
+    echo "  ./build.sh install --config my.env            # Install with custom config"
     echo "  ./build.sh build --version 10.1.16            # Build specific version"
-    echo "  ./build.sh build --base-image ubuntu:24.04    # Build for Ubuntu 24.04"
     echo "  ./build.sh build --base-image rockylinux:9    # Build for Rocky Linux 9"
-    echo "  ./build.sh info                               # Show what will be built"
     echo "  ./build.sh deploy root@mail.example.com       # Deploy to remote server"
     echo "  ./build.sh deploy user@host --config my.env   # Deploy with custom config"
     echo ""
-    echo "Config file: .env (see .env.example)"
+    echo "Config files: .env (build) and scripts/install-config.env (install)"
     echo ""
 }
 
-# ── Parse arguments ────────────────────────────────────────
+show_install_help() {
+    echo "Usage: ./build.sh install [OPTIONS] [ZIMBRA_TGZ_PATH]"
+    echo ""
+    echo "Options:"
+    echo "  --config FILE      Load configuration from FILE (default: scripts/install-config.env)"
+    echo "  --url URL          Download Zimbra installer from URL"
+    echo "  --dry-run          Show what would be done, don't do it"
+    echo "  --skip-deps        Skip dependency installation"
+    echo "  --skip-ssl         Skip SSL certificate setup"
+    echo "  --skip-theme       Skip theme installation"
+    echo "  --skip-relay       Skip relay configuration"
+    echo "  --hostname NAME    Set server hostname"
+    echo "  --domain NAME      Set email domain"
+    echo "  --admin-pass PASS  Set admin password"
+    echo "  --force            Re-install even if Zimbra is already installed"
+    echo ""
+    echo "Examples:"
+    echo "  $0 install zcs-10.1.16_GA_*.tgz"
+    echo "  $0 install --config install-config.env zcs-*.tgz"
+    echo "  $0 install --url https://example.com/zcs-*.tgz --dry-run"
+}
+
+# ═══════════════════════════════════════════════════════════
+#  MAIN
+# ═══════════════════════════════════════════════════════════
+
 case "${1:-}" in
     -h|--help|help) show_help; exit 0 ;;
 esac
@@ -634,11 +1422,11 @@ while [ $# -gt 0 ]; do
         --uid)         BUILD_UID="$2"; shift 2 ;;
         --gid)         BUILD_GID="$2"; shift 2 ;;
         --no-cache)    NO_CACHE=true; shift ;;
+        --skip-install) SKIP_INSTALL=true; shift ;;
         *)             break ;;
     esac
 done
 
-# ── Execute ────────────────────────────────────────────────
 case "${COMMAND}" in
     build)
         banner
@@ -658,6 +1446,48 @@ case "${COMMAND}" in
         
         build_image
         run_build
+        
+        # ── Auto-install after a successful build ──────────
+        if [ "${SKIP_INSTALL}" = "true" ]; then
+            log "Skipping install step (--skip-install)"
+        elif [ "$(id -u)" -eq 0 ]; then
+            log "Build complete — running installer on this server..."
+            run_install
+        else
+            warn "Build complete, but not running as root — skipping local install."
+            warn "Run 'sudo ./build.sh install' to install here, or './build.sh deploy user@host'."
+        fi
+        ;;
+    install)
+        # NOTE: no `local` here — this runs at top level, not inside a function
+        tgz=""
+        cfg=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --config)      cfg="$2"; shift 2 ;;
+                --url)         ZIMBRA_TGZ_URL="$2"; shift 2 ;;
+                --dry-run)     DRY_RUN=true; shift ;;
+                --skip-deps)   SKIP_DEPS=true; shift ;;
+                --skip-ssl)    SKIP_SSL=true; shift ;;
+                --skip-theme)  SKIP_THEME=true; shift ;;
+                --skip-relay)  SKIP_RELAY=true; shift ;;
+                --hostname)    HOSTNAME="$2"; shift 2 ;;
+                --domain)      DOMAIN="$2"; shift 2 ;;
+                --admin-pass)  ZIMBRA_ADMIN_PASSWORD="$2"; shift 2 ;;
+                --force)       FORCE_REINSTALL=true; shift ;;
+                -h|--help)     show_install_help; exit 0 ;;
+                -*)
+                    if [ -f "$1" ]; then
+                        tgz="$1"; shift
+                    else
+                        err "Unknown option: $1"; show_install_help; exit 1
+                    fi
+                    ;;
+                *)             tgz="$1"; shift ;;
+            esac
+        done
+        CONFIG_FILE="${cfg}"
+        run_install "${tgz}"
         ;;
     info)
         show_info
