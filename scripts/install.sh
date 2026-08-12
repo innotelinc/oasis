@@ -30,7 +30,10 @@ PUBLIC_IP="${PUBLIC_IP:-}"
 TIMEZONE="${TIMEZONE:-America/New_York}"
 ZIMBRA_ADMIN_PASSWORD="${ZIMBRA_ADMIN_PASSWORD:-}"
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-admin@example.com}"
-if [ ${#SSL_DOMAINS[@]} -eq 0 ]; then SSL_DOMAINS=(mail.example.com); fi
+# Use ${SSL_DOMAINS:+x} rather than "${SSL_DOMAINS[@]:-}" or ${#SSL_DOMAINS[@]}
+# so this is safe under `set -u` even when the array was never declared
+# (older bash reports "SSL_DOMAINS: unbound variable" otherwise).
+if [ -z "${SSL_DOMAINS:+x}" ]; then SSL_DOMAINS=(mail.example.com); fi
 CREATE_SWAP="${CREATE_SWAP:-true}"
 SWAP_SIZE_MB="${SWAP_SIZE_MB:-1024}"
 DISABLE_IPV6="${DISABLE_IPV6:-true}"
@@ -54,7 +57,7 @@ SKIP_DNS="${SKIP_DNS:-false}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_THEME="${SKIP_THEME:-false}"
 SKIP_RELAY="${SKIP_RELAY:-false}"
-if [ ${#DNS_SERVERS[@]} -eq 0 ]; then DNS_SERVERS=("8.8.8.8" "8.8.4.4"); fi
+if [ -z "${DNS_SERVERS:+x}" ]; then DNS_SERVERS=("8.8.8.8" "8.8.4.4"); fi
 
 # ── Detect OS ──────────────────────────────────────────────
 detect_os() {
@@ -96,13 +99,13 @@ check_root() {
 
 # ── Idempotency check ─────────────────────────────────────
 check_already_installed() {
-    if [ -f /opt/zimbra/.install_done ]; then
-        warn "Zimbra appears to be already installed (found /opt/zimbra/.install_done)"
-        warn "Remove /opt/zimbra/.install_done to force re-install, or use --force"
-        if [ "${FORCE_REINSTALL:-false}" != "true" ]; then
-            exit 0
+    if [ -f /opt/zimbra/bin/zmcontrol ] || [ -f /opt/zimbra/.install_done ]; then
+        warn "Zimbra appears to be already installed"
+        ZIMBRA_ALREADY_INSTALLED=true
+        if [ "${FORCE_REINSTALL:-false}" = "true" ]; then
+            warn "FORCE_REINSTALL=true — re-installing"
+            ZIMBRA_ALREADY_INSTALLED=false
         fi
-        warn "FORCE_REINSTALL=true — proceeding anyway"
     fi
 }
 
@@ -297,6 +300,11 @@ EOF
 
 install_zimbra() {
     header "Installing Zimbra"
+    
+    if [ "${ZIMBRA_ALREADY_INSTALLED:-false}" = "true" ]; then
+        info "Zimbra already installed, skipping installation."
+        return 0
+    fi
     
     local tgz_path="${1:-${ZIMBRA_TGZ_PATH}}"
     local tgz_url="${ZIMBRA_TGZ_URL}"
