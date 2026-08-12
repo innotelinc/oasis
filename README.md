@@ -16,10 +16,11 @@ cd mail-platform
 # 2. (Optional) Configure
 cp .env.example .env   # edit with your preferences
 
-# 3. Build the installer
+# 3. Build the installer — then automatically installs on this server
+#    when run as root (on a dev machine, add --skip-install)
 ./build.sh
 
-# 4. Deploy to your mail server (builds dir → server → auto-install)
+# 4. Or deploy to a remote mail server (builds dir → server → auto-install)
 ./build.sh deploy root@mail.example.com
 ```
 
@@ -29,7 +30,9 @@ cp .env.example .env   # edit with your preferences
 
 | Command | Description |
 |---------|-------------|
-| `./build.sh` | Build latest Zimbra (interactive version + OS picker) |
+| `./build.sh` | Build latest Zimbra, then install on this server (as root) |
+| `./build.sh install [zcs-*.tgz]` | Install on this server (standalone) |
+| `./build.sh build --skip-install` | Build only (e.g. on a dev machine) |
 | `./build.sh deploy user@host` | Deploy and install on remote server via SSH |
 | `./build.sh info` | Show build configuration |
 | `./build.sh clean` | Remove all artifacts and images |
@@ -103,7 +106,8 @@ cp .env.example .env   # edit with your preferences
 ```
 
 **Progress:** deploy runs in 4 phases with live output — `[1/4]` SSH check,
-`[2/4]` installer upload, `[3/4]` install-script upload, `[4/4]` remote install.
+`[2/4]` installer upload, `[3/4]` build-script upload (build.sh contains the
+installer), `[4/4]` remote install.
 Transfers show a progress bar (`pv` if installed, otherwise scp's native meter —
 `apt install pv` to get the bar), and the long install phase streams the
 server's output in real time with an animated spinner + elapsed-time line.
@@ -136,7 +140,7 @@ Details:
 - **No key installed** → `scp`/`ssh` prompt for the password interactively.
 - **`root@host`** → the remote install already runs as root, so no sudo prompt.
 - **`user@host`** → you'll be prompted for the remote sudo password once (the
-  install phase runs `sudo bash install.sh`).
+  install phase runs `sudo bash build.sh install`).
 - If the key is rejected you'll get a connection error telling you to run
   `ssh-copy-id` or set `DEPLOY_SSH_KEY`/`DEPLOY_SSH_PORT`/`DEPLOY_SSH_OPTS`.
 
@@ -144,32 +148,32 @@ Details:
 
 ```bash
 # 1. Copy files to server
-scp ./builds/zcs-*.tgz scripts/install.sh scripts/install-config.env root@mail.example.com:/usr/src/
+scp ./builds/zcs-*.tgz build.sh scripts/install-config.env root@mail.example.com:/usr/src/
 
 # 2. Edit config on the server
 ssh root@mail.example.com
 cd /usr/src
 nano install-config.env   # Set passwords, domain, relay, etc.
 
-# 3. Run the installer
-sudo bash install.sh --config install-config.env zcs-*.tgz
+# 3. Run the installer (build.sh contains the installer)
+sudo bash build.sh install --config install-config.env zcs-*.tgz
 
 # Or skip certain sections:
-sudo bash install.sh --skip-ssl --skip-theme --config install-config.env zcs-*.tgz
+sudo bash build.sh install --skip-ssl --skip-theme --config install-config.env zcs-*.tgz
 ```
 
 ---
 
-## What install.sh Does
+## What the Installer Does
 
-The install script covers the complete server setup:
+The installer (built into `build.sh` as the `install` command) covers the complete server setup:
 
 | Section | What it does |
 |---------|-------------|
 | Dependencies | Installs GCC, Java 8, Ant, Maven, Perl, etc. |
 | Postfix | Stops and removes existing Postfix |
 | Webmin | Installs Webmin for server administration |
-| Hostname/DNS | Sets hostname, /etc/hosts, dnsmasq |
+| Hostname | Sets hostname and /etc/hosts |
 | IPv6/Firewall | Disables IPv6 and firewalls |
 | Zimbra Install | Extracts and runs Zimbra installer |
 | Post-config | HTTPS redirect, LMTP, Amavis, SpamAssassin |
@@ -265,7 +269,6 @@ RELAY_TLS_LEVEL="may"
 SKIP_SSL=false
 SKIP_THEME=true
 SKIP_RELAY=false
-SKIP_DNS=false
 SKIP_DEPS=false
 DRY_RUN=false
 ```
@@ -352,14 +355,14 @@ After a successful build, the installer lands in `./builds/`:
 
 ```
 .
-├── build.sh                  # One-command build + deploy script
+├── build.sh                  # One-command build + install + deploy script
 ├── Dockerfile                # Multi-distro builder image
 ├── docker-compose.yml        # Docker Compose for easy builds
 ├── .env.example              # Environment config template
 └── scripts/
     ├── entrypoint.sh         # Container entrypoint (detect OS, run zm-build)
-    ├── install.sh            # Universal Zimbra installer (Ubuntu + RHEL)
     ├── setup-vps-relay.sh    # emailrelay outbound relay for your VPS (port 25)
+    ├── verify.sh             # Post-install verification
     └── install-config.env    # Install configuration template (gitignored)
 ```
 
