@@ -56,8 +56,31 @@ cp .env.example .env   # edit with your preferences
 # Disable Docker cache
 ./build.sh build --no-cache
 
+# Force a rebuild even if the installer .tgz already exists
+./build.sh build --rebuild
+
 # All options combined
 ./build.sh build --base-image ubuntu:24.04 --version 10.1.16 --output ./my-builds
+```
+
+### Idempotent / incremental builds
+
+`build.sh` and the container entrypoint both skip the long zm-build run when an
+installer for the same **Zimbra version + target OS** already exists in
+`./builds/`:
+
+```bash
+./build.sh            # re-run: skips the 2-6 hour build, then installs
+```
+
+- The match includes the target OS (`UBUNTU22_64`, `RHEL9_64`, …), so switching
+  `--base-image` (e.g. `ubuntu:22.04` → `rockylinux:9`) triggers a fresh build
+  even for the same version.
+- Force a rebuild with `--rebuild` or `FORCE_REBUILD=true`:
+
+```bash
+./build.sh build --rebuild
+FORCE_REBUILD=true docker compose up --build
 ```
 
 ---
@@ -183,6 +206,10 @@ The installer (built into `build.sh` as the `install` command) covers the comple
 | Email Relay | Emailrelay local submission proxy (optional) |
 | Swap | Creates swap file |
 
+Re-runs are idempotent: dependency installation and Let's Encrypt issuance are
+skipped when already done (marker file / existing certificate), and the Zimbra
+install is skipped if `/opt/zimbra/.install_done` exists.
+
 ---
 
 ## Outbound Mail When Your ISP Blocks Port 25
@@ -271,6 +298,9 @@ SKIP_THEME=true
 SKIP_RELAY=false
 SKIP_DEPS=false
 DRY_RUN=false
+
+# Idempotency — re-runs skip steps already completed
+DEPS_MARKER=/var/lib/zimbra-installer/.deps_done   # skip dep install once this exists
 ```
 
 ---
@@ -296,6 +326,7 @@ Environment variables from `.env` are automatically loaded:
 
 ```bash
 ZIMBRA_VERSION=10.1.16 BASE_IMAGE=ubuntu:24.04 docker compose up --build
+FORCE_REBUILD=true docker compose up --build   # skip the already-built check
 ```
 
 ---
@@ -389,9 +420,9 @@ If you still hit it, rebuild the image with `--no-cache` to bypass a stale layer
 
 > **Tip:** run `./build.sh test` first as a pre-flight — it verifies all required
 tools (including `rsync`) are present inside the container before you commit to
-the long build. Note that the zm-build run always starts from scratch: the build
-container runs with `--rm` and only `./builds` (the installer output) is kept, so
-expect the full 2–6 hour run after a fix.
+the long build. The build container runs with `--rm` and only `./builds` (the
+installer output) is kept; if an installer for the same version + OS already
+exists there, the run is skipped — use `--rebuild` to force a fresh 2–6 hour run.
 
 ### Build fails with "No such branch"
 

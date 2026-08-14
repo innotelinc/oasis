@@ -76,10 +76,12 @@ DISABLE_MODERN_UI="${DISABLE_MODERN_UI:-false}"
 SMTP_ALT_PORT="${SMTP_ALT_PORT:-}"
 MY_NETWORKS="${MY_NETWORKS:-}"
 SKIP_DEPS="${SKIP_DEPS:-false}"
+DEPS_MARKER="${DEPS_MARKER:-/var/lib/zimbra-installer/.deps_done}"
 SKIP_SSL="${SKIP_SSL:-false}"
 SKIP_THEME="${SKIP_THEME:-false}"
 SKIP_RELAY="${SKIP_RELAY:-false}"
 SKIP_INSTALL="${SKIP_INSTALL:-false}"     # build-only mode (no auto-install)
+FORCE_REBUILD="${FORCE_REBUILD:-false}"     # rebuild even if installer .tgz already exists
 CONFIG_FILE="${CONFIG_FILE:-}"
 
 # Load .env if present
@@ -282,6 +284,22 @@ image_tag() {
     echo "${IMAGE_NAME}:${tag}-zimbra${ZIMBRA_VERSION}"
 }
 
+# Derive the zm-build OS target token (UBUNTU22_64, RHEL9_64, ...) from
+# BASE_IMAGE, mirroring scripts/entrypoint.sh resolve_os_target(). Used by the
+# skip-if-built check so that switching BASE_IMAGE forces a rebuild even for
+# the same Zimbra version. Empty string = unknown (match version only).
+build_os_token() {
+    local id version major image="${BASE_IMAGE##*/}"
+    id="${image%%:*}"
+    version="${image##*:}"
+    major="${version%%.*}"
+    case "${id}" in
+        ubuntu|debian)                                      echo "UBUNTU${major}_64" ;;
+        rocky|rockylinux|almalinux|rhel|centos|ol|oracle|oraclelinux) echo "RHEL${major}_64" ;;
+        *)                                                  echo "" ;;
+    esac
+}
+
 build_image() {
     header "Building Docker Image"
     
@@ -315,8 +333,31 @@ build_image() {
     log "Image built: ${tag}"
 }
 
+# Find an already-built installer .tgz for the resolved version + target OS, if
+# any. Prints the path to stdout, or nothing when not found.
+find_built_tgz() {
+    local tgz os_token glob
+    os_token=$(build_os_token)
+    if [ -n "${os_token}" ]; then
+        glob="zcs-${ZIMBRA_VERSION}_*.${os_token}.*.tgz"
+    else
+        glob="zcs-${ZIMBRA_VERSION}_*.tgz"
+    fi
+    tgz=$(ls -t "${BUILD_DIR}"/${glob} 2>/dev/null | head -1 || true)
+    [ -n "${tgz}" ] && [ -f "${tgz}" ] && echo "${tgz}"
+}
+
 run_build() {
     header "Building Zimbra ${ZIMBRA_VERSION}"
+    
+    # Skip the (2-6 hour) build if an installer for this version already exists.
+    local existing
+    existing=$(find_built_tgz)
+    if [ -n "${existing}" ] && [ "${FORCE_REBUILD}" != "true" ]; then
+        log "Installer already built: ${existing}"
+        log "Skipping build — use --rebuild (or FORCE_REBUILD=true) to force a fresh build."
+        return 0
+    fi
     
     local tag
     tag=$(image_tag)
@@ -335,6 +376,7 @@ run_build() {
     docker run ${DOCKER_RUN_OPTS} \
         --rm \
         -e ZIMBRA_VERSION="${ZIMBRA_VERSION}" \
+        -e FORCE_REBUILD="${FORCE_REBUILD}" \
         -v "$(pwd)/${BUILD_DIR}:/home/build/installer-build/BUILDS" \
         "${tag}" \
         --build
@@ -690,6 +732,12 @@ install_deps() {
         return 0
     fi
     
+    # Idempotent: skip the (slow) package install + `dnf update` on re-runs.
+    if [ -f "${DEPS_MARKER}" ] && [ "${FORCE_REINSTALL:-false}" != "true" ]; then
+        info "Dependencies already installed (${DEPS_MARKER}), skipping."
+        return 0
+    fi
+    
     if [ "${PKG_MGR}" = "apt" ]; then
         dry apt update
         dry apt -y install gcc make g++ openssl libxml2-dev perl net-tools \
@@ -703,6 +751,9 @@ install_deps() {
             ruby ruby-devel maven rsyslog python3 python3-devel \
             augeas augeas-devel
     fi
+    
+    dry mkdir -p "$(dirname "${DEPS_MARKER}")"
+    dry touch "${DEPS_MARKER}"
     log "Dependencies installed"
 }
 
@@ -994,6 +1045,15 @@ setup_letsencrypt() {
     if [ "${SKIP_SSL}" = "true" ]; then return 0; fi
     
     header "Setting up Let's Encrypt SSL"
+    
+    # Idempotent: skip issuance if a cert already exists for the primary domain.
+    # certbot's non-interactive mode would otherwise error on an existing cert.
+    local fullchain="/etc/letsencrypt/live/${SSL_DOMAINS[0]}/fullchain.pem"
+    local privkey="/etc/letsencrypt/live/${SSL_DOMAINS[0]}/privkey.pem"
+    if [ -f "${fullchain}" ] && [ -f "${privkey}" ]; then
+        info "Certificate already exists for ${SSL_DOMAINS[0]}, skipping issuance."
+        return 0
+    fi
     
     # Install certbot via python venv (most portable)
     cd /usr/src
@@ -1339,6 +1399,7 @@ show_help() {
     echo "  --base-image IMAGE   Docker base image (default: ubuntu:22.04)"
     echo "  --output DIR         Output directory (default: ./builds)"
     echo "  --skip-install       Build only, do not install afterwards"
+    echo "  --rebuild            Rebuild even if the installer .tgz already exists"
     echo ""
     echo "Install options:"
     echo "  --config FILE        Install configuration file (default: scripts/install-config.env)"
@@ -1423,6 +1484,7 @@ while [ $# -gt 0 ]; do
         --gid)         BUILD_GID="$2"; shift 2 ;;
         --no-cache)    NO_CACHE=true; shift ;;
         --skip-install) SKIP_INSTALL=true; shift ;;
+        --rebuild)     FORCE_REBUILD=true; shift ;;
         *)             break ;;
     esac
 done
