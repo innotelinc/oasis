@@ -153,6 +153,30 @@ generate_tag_list() {
 }
 
 # ── Main build function ────────────────────────────────────
+
+# Clone zm-build with retries to survive transient DNS/network failures.
+# GIT_CLONE_ATTEMPTS / GIT_CLONE_DELAY tune the retry behavior. Each attempt
+# removes any partial clone so git never trips over a leftover directory.
+git_clone_retry() {
+    local branch="$1"
+    local attempts="${GIT_CLONE_ATTEMPTS:-5}"
+    local delay="${GIT_CLONE_DELAY:-10}"
+    local i=1
+    while [ "${i}" -le "${attempts}" ]; do
+        rm -rf zm-build 2>/dev/null || true
+        if git clone --depth 1 --branch "${branch}" \
+            https://github.com/Zimbra/zm-build.git 2>&1 | sed 's/^/  /'; then
+            return 0
+        fi
+        if [ "${i}" -lt "${attempts}" ]; then
+            warn "Clone of ${branch} failed (attempt ${i}/${attempts}) — retrying in ${delay}s..."
+            sleep "${delay}"
+        fi
+        i=$((i + 1))
+    done
+    return 1
+}
+
 do_build() {
     log "============================================"
     log "  Zimbra FOSS Builder"
@@ -194,15 +218,25 @@ do_build() {
     # Clean any previous build artifacts
     rm -rf zm-build 2>/dev/null || true
     
-    # Clone zm-build — try tag first, then release branch
+    # Pre-flight: fail fast (with a clear message) if the container cannot
+    # resolve the repos it needs, instead of a cryptic "Could not resolve host"
+    # surfacing mid-clone.
+    if ! getent hosts github.com >/dev/null 2>&1; then
+        err "DNS resolution failed — cannot resolve github.com."
+        err "Check the container's network/DNS (or host /etc/resolv.conf) and re-run."
+        exit 1
+    fi
+    
+    # Clone zm-build — try tag first, then release branch. Each attempt retries
+    # a few times so a transient DNS/network blip doesn't abort the whole build.
     log "Cloning zm-build (version ${ZIMBRA_VERSION})..."
-    local clone_ok=true
-    git clone --depth 1 --branch "${ZIMBRA_VERSION}" \
-        https://github.com/Zimbra/zm-build.git 2>&1 | sed 's/^/  /' || clone_ok=false
-    if ! ${clone_ok}; then
+    if ! git_clone_retry "${ZIMBRA_VERSION}"; then
         warn "Tag ${ZIMBRA_VERSION} not found, trying release/${ZIMBRA_VERSION}..."
-        git clone --depth 1 --branch "release/${ZIMBRA_VERSION}" \
-            https://github.com/Zimbra/zm-build.git 2>&1 | sed 's/^/  /'
+        if ! git_clone_retry "release/${ZIMBRA_VERSION}"; then
+            err "Failed to clone zm-build (tag ${ZIMBRA_VERSION} and release/${ZIMBRA_VERSION})."
+            err "Check network/DNS access to github.com and re-run."
+            exit 1
+        fi
     fi
     
     cd zm-build
