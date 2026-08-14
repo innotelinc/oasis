@@ -18,6 +18,7 @@ services:
     container_name: zimbra-builder
     environment:
       - ZIMBRA_VERSION=${ZIMBRA_VERSION:-latest}
+      - FORCE_REBUILD=${FORCE_REBUILD:-false}
     volumes:
       - ./builds:/home/build/installer-build/BUILDS:rw
     command: ["--build"]

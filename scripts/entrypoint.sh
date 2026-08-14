@@ -162,6 +162,23 @@ do_build() {
     log "  OS:      ${OS_NAME}"
     log "============================================"
     
+    # Skip the (2-6 hour) build if an installer for this version + target OS
+    # already exists in the mounted output dir (e.g. a previous `docker run`
+    # reused ./builds). Matching ${BUILD_OS} means changing the target OS
+    # (e.g. ubuntu:24.04 → rockylinux:9) triggers a rebuild.
+    local existing os_glob
+    if [ -n "${BUILD_OS:-}" ]; then
+        os_glob="zcs-${ZIMBRA_VERSION}_*.${BUILD_OS}.*.tgz"
+    else
+        os_glob="zcs-${ZIMBRA_VERSION}_*.tgz"
+    fi
+    existing=$(ls -t "${OUTPUT_DIR}"/${os_glob} 2>/dev/null | head -1 || true)
+    if [ -n "${existing}" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
+        log "Installer already built: ${existing}"
+        log "Skipping build — set FORCE_REBUILD=true to force a fresh build."
+        return 0
+    fi
+    
     # Create build directory — fix ownership in case Docker volume
     # mount created parent dirs as root-owned
     local uid_gid="$(id -u):$(id -g)"
