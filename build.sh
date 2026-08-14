@@ -344,7 +344,9 @@ find_built_tgz() {
         glob="zcs-${ZIMBRA_VERSION}_*.tgz"
     fi
     tgz=$(ls -t "${BUILD_DIR}"/${glob} 2>/dev/null | head -1 || true)
-    [ -n "${tgz}" ] && [ -f "${tgz}" ] && echo "${tgz}"
+    if [ -n "${tgz}" ] && [ -f "${tgz}" ]; then
+        echo "${tgz}"
+    fi
 }
 
 run_build() {
