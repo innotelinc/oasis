@@ -35,6 +35,12 @@ BUILD_UID="${BUILD_UID:-1000}"
 BUILD_GID="${BUILD_GID:-1000}"
 DOCKER_BUILD_OPTS="${DOCKER_BUILD_OPTS:-}"
 DOCKER_RUN_OPTS="${DOCKER_RUN_OPTS:-}"
+# DNS servers for the build container (space-separated). Defaults to public
+# resolvers as a fallback for hosts whose /etc/resolv.conf points at the
+# systemd-resolved stub (127.0.0.53), which containers can't reach. Set to an
+# empty string to use the Docker daemon's DNS instead (e.g. corporate/VPN), or
+# to your own list of resolvers.
+DOCKER_DNS="${DOCKER_DNS:-8.8.8.8 1.1.1.1}"
 NO_CACHE="${NO_CACHE:-false}"
 
 # Deploy / SSH (set in .env or environment)
@@ -349,6 +355,19 @@ find_built_tgz() {
     fi
 }
 
+# Emit `--dns` flags for the build container from the space-separated
+# DOCKER_DNS list. Empty DOCKER_DNS = no flags (use the daemon's DNS).
+docker_dns_args() {
+    if [ -z "${DOCKER_DNS}" ]; then
+        return 0
+    fi
+    local dns args=()
+    for dns in ${DOCKER_DNS}; do
+        args+=(--dns "${dns}")
+    done
+    printf '%s\n' "${args[@]}"
+}
+
 run_build() {
     header "Building Zimbra ${ZIMBRA_VERSION}"
     
@@ -377,6 +396,7 @@ run_build() {
     
     docker run ${DOCKER_RUN_OPTS} \
         --rm \
+        $(docker_dns_args) \
         -e ZIMBRA_VERSION="${ZIMBRA_VERSION}" \
         -e FORCE_REBUILD="${FORCE_REBUILD}" \
         -v "$(pwd)/${BUILD_DIR}:/home/build/installer-build/BUILDS" \

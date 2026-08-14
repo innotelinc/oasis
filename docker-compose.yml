@@ -21,6 +21,15 @@ services:
       - FORCE_REBUILD=${FORCE_REBUILD:-false}
     volumes:
       - ./builds:/home/build/installer-build/BUILDS:rw
+
+    # Public DNS fallback — hosts whose /etc/resolv.conf points at the
+    # systemd-resolved stub (127.0.0.53) can't resolve from inside the
+    # container. Override via .env (DOCKER_DNS1 / DOCKER_DNS2), e.g. for
+    # corporate/VPN DNS.
+    dns:
+      - ${DOCKER_DNS1:-8.8.8.8}
+      - ${DOCKER_DNS2:-1.1.1.1}
+
     command: ["--build"]
     
     # Resource limits (optional — uncomment to constrain)

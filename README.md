@@ -401,6 +401,46 @@ After a successful build, the installer lands in `./builds/`:
 
 ## Troubleshooting
 
+### Build fails with `DNS resolution failed — cannot resolve github.com`
+
+The builder's pre-flight DNS check (`getent hosts github.com`) fails when the
+container can't resolve DNS — even though the image itself built fine. The
+usual culprit on Ubuntu hosts is systemd-resolved: Docker copies the host's
+`/etc/resolv.conf` into the container, and that file points at the
+systemd-resolved stub (`nameserver 127.0.0.53`), which only listens on the
+*host's* loopback — so every lookup from inside the container fails.
+
+Confirm it on the host:
+
+```bash
+cat /etc/resolv.conf                        # ← look for 127.0.0.53
+cat /etc/docker/daemon.json                 # check for an existing dns override
+docker run --rm alpine nslookup github.com
+```
+
+**Built-in fallback** — `build.sh` now passes `--dns 8.8.8.8 --dns 1.1.1.1` to
+the build container by default (and `docker-compose.yml` sets the same), so this
+error shouldn't appear on systemd-resolved hosts. To use your own resolvers —
+or the Docker daemon's DNS (e.g. corporate/VPN) — set `DOCKER_DNS` in `.env`:
+
+```bash
+DOCKER_DNS=""                     # use the Docker daemon's DNS
+DOCKER_DNS="10.0.0.1 10.0.0.2"    # your own resolvers
+```
+
+**Permanent fix** — configure the Docker daemon to use a reachable resolver for
+every container. Edit `/etc/docker/daemon.json`:
+
+```json
+{
+  "dns": ["8.8.8.8", "1.1.1.1"]
+}
+```
+
+Then `sudo systemctl restart docker` and re-run the build. If you're behind a
+corporate network or VPN, use your internal resolver (e.g. `10.x.x.x`) instead
+of the public ones.
+
 ### Build fails with `open3: exec of rsync ... failed: No such file or directory`
 
 The packaging stage of zm-build uses `rsync` to stage the installer files, but
