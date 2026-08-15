@@ -339,20 +339,30 @@ build_image() {
     log "Image built: ${tag}"
 }
 
+# Find the newest Zimbra installer .tgz under BUILD_DIR, searching
+# recursively. zm-build may nest the archive inside a versioned subdirectory
+# (e.g. BUILD_DIR/UBUNTU24_64-DAFFODIL-10116-...-FOSS-.../) rather than leaving
+# it at the top level, so a top-level-only glob would miss it. Prints the path
+# to stdout, or nothing when not found. Optional argument restricts the
+# filename pattern (a `find -name` glob).
+find_newest_tgz() {
+    local pattern="${1:-zcs-*.tgz}"
+    # `-exec ls -t {} +` sorts the matches by mtime (newest first); `head -1`
+    # keeps the newest. Files are few, so a single `ls` batch is guaranteed.
+    find "${BUILD_DIR}" -type f -name "${pattern}" -exec ls -t {} + 2>/dev/null | head -1
+}
+
 # Find an already-built installer .tgz for the resolved version + target OS, if
 # any. Prints the path to stdout, or nothing when not found.
 find_built_tgz() {
-    local tgz os_token glob
+    local os_token glob
     os_token=$(build_os_token)
     if [ -n "${os_token}" ]; then
         glob="zcs-${ZIMBRA_VERSION}_*.${os_token}.*.tgz"
     else
         glob="zcs-${ZIMBRA_VERSION}_*.tgz"
     fi
-    tgz=$(ls -t "${BUILD_DIR}"/${glob} 2>/dev/null | head -1 || true)
-    if [ -n "${tgz}" ] && [ -f "${tgz}" ]; then
-        echo "${tgz}"
-    fi
+    find_newest_tgz "${glob}"
 }
 
 # Emit `--dns` flags for the build container from the space-separated
@@ -614,7 +624,7 @@ do_deploy() {
 
     # Find the installer .tgz
     if [ -z "${tgz_file}" ]; then
-        tgz_file=$(ls -t "${BUILD_DIR}"/zcs-*.tgz 2>/dev/null | head -1) || true
+        tgz_file=$(find_newest_tgz) || true
     fi
 
     if [ -z "${tgz_file}" ] || [ ! -f "${tgz_file}" ]; then
@@ -1367,7 +1377,7 @@ run_install() {
         tgz="${ZIMBRA_TGZ_PATH:-}"
     fi
     if [ -z "${tgz}" ]; then
-        tgz=$(ls -t "${BUILD_DIR}"/zcs-*.tgz 2>/dev/null | head -1 || true)
+        tgz=$(find_newest_tgz || true)
         if [ -n "${tgz}" ]; then
             log "Using newest build: ${tgz}"
         fi
