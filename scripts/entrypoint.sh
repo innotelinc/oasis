@@ -196,7 +196,7 @@ do_build() {
     else
         os_glob="zcs-${ZIMBRA_VERSION}_*.tgz"
     fi
-    existing=$(ls -t "${OUTPUT_DIR}"/${os_glob} 2>/dev/null | head -1 || true)
+    existing=$(find "${OUTPUT_DIR}" -type f -name "${os_glob}" -exec ls -t {} + 2>/dev/null | head -1 || true)
     if [ -n "${existing}" ] && [ "${FORCE_REBUILD:-false}" != "true" ]; then
         log "Installer already built: ${existing}"
         log "Skipping build — set FORCE_REBUILD=true to force a fresh build."
