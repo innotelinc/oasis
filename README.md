@@ -32,6 +32,7 @@ cp .env.example .env   # edit with your preferences
 |---------|-------------|
 | `./build.sh` | Build latest Zimbra, then install on this server (as root) |
 | `./build.sh install [zcs-*.tgz]` | Install on this server (standalone) |
+| `./build.sh check [--config FILE]` | Pre-install diagnostics: config, DNS, port 80, installer |
 | `./build.sh build --skip-install` | Build only (e.g. on a dev machine) |
 | `./build.sh deploy user@host` | Deploy and install on remote server via SSH |
 | `./build.sh info` | Show build configuration |
@@ -184,6 +185,29 @@ sudo bash build.sh install --config install-config.env zcs-*.tgz
 # Or skip certain sections:
 sudo bash build.sh install --skip-ssl --skip-theme --config install-config.env zcs-*.tgz
 ```
+
+### Pre-install diagnostics (`./build.sh check`)
+
+Before running the install, verify the config, DNS, and port 80 — the things
+that most often make the install abort (especially the Let's Encrypt step).
+Safe to run as any user:
+
+```bash
+./build.sh check                      # uses scripts/install-config.env if present
+./build.sh check --config my.env      # or a custom config file
+```
+
+It reports PASS/WARN/FAIL per item and exits non-zero if anything FAILed:
+
+- **Configuration** — real (non-placeholder) `HOSTNAME`/`DOMAIN`/`SSL_DOMAINS`,
+  `ZIMBRA_ADMIN_PASSWORD` set, `LETSENCRYPT_EMAIL`, `PUBLIC_IP`, relay sanity.
+- **DNS** — each `SSL_DOMAINS` entry resolves to this server's public IP
+  (checked against `PUBLIC_IP` or auto-detected).
+- **Port 80** — nothing squatting on local port 80, no active ufw/firewalld
+  blocking it, and inbound TCP 80 reachability from the internet via
+  [check-host.net](https://check-host.net) (best-effort — skipped with a WARN
+  if the check service is unreachable).
+- **Installer** — a `zcs-*.tgz` exists in `./builds` (or `ZIMBRA_TGZ_PATH` set).
 
 ---
 
@@ -470,6 +494,57 @@ The version tag might not exist. Check available versions:
 
 ```bash
 git ls-remote --tags https://github.com/Zimbra/zm-build.git | grep -E '[0-9]+\.[0-9]+\.[0-9]+$'
+```
+
+### Install fails with `certbot failed — check DNS points to this server`
+
+The Let's Encrypt step failed. The script now shows certbot's full error output
+(saved to `/var/log/letsencrypt-request.log`) and a pre-flight DNS check, so
+re-run to see the real reason. The usual causes, in order:
+
+1. **Placeholder domain never replaced.** If the message says
+   `Requesting certificate for: mail.example.com`, your config still has the
+   template values — `example.com` is IANA-reserved and can never be issued a
+   certificate. Set the real domain in `scripts/install-config.env` (or `.env`):
+
+   ```bash
+   HOSTNAME=mail.yourdomain.com
+   DOMAIN=yourdomain.com
+   SSL_DOMAINS=("mail.yourdomain.com")
+   LETSENCRYPT_EMAIL=you@yourdomain.com
+   ```
+
+   To skip Let's Encrypt for now: `SKIP_SSL=true`.
+
+2. **DNS doesn't point at this server.** The `A` record for your domain must
+   resolve to this server's public IP, e.g.:
+
+   ```bash
+   dig +short mail.yourdomain.com     # should print your server's public IP
+   ```
+
+   Fix the record at your DNS provider and wait for propagation (can take
+   minutes to hours) before re-running.
+
+3. **Port 80 not reachable.** Certbot's standalone mode needs inbound TCP 80
+   from the internet — check NAT/port-forwarding and that no firewall is
+   blocking it.
+
+4. **Rate limit.** Let's Encrypt allows 5 duplicate certificates per week per
+   domain; repeated failed/duplicate requests hit this limit.
+
+On failure the installer now also restarts Zimbra's proxy and mailbox services
+(they're stopped to free ports 80/443 during issuance), so the server isn't
+left without them.
+
+**Fallback instead of aborting** — after a certbot failure the installer asks
+*Continue the install without SSL? [y/N]*. Answering `y` skips SSL (same as
+`--skip-ssl`) and finishes the install; `N`/Enter aborts. Runs that can't
+prompt — `deploy` over SSH, cron, CI — never hang: they abort unless you set
+`SSL_FAILURE=skip` to auto-continue without SSL.
+
+```bash
+SSL_FAILURE=skip sudo bash build.sh install --config install-config.env zcs-*.tgz
 ```
 
 ### Out of memory
