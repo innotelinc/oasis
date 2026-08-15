@@ -911,6 +911,12 @@ install_zimbra() {
     
     log "Using installer: ${tgz_path}"
     
+    # Canonicalize to an absolute path. find_newest_tgz returns a path
+    # relative to the script dir (e.g. ./builds/...); the `cd /usr/src` below
+    # would otherwise break that relative path, making tar report "No such
+    # file or directory" for a file that clearly exists.
+    tgz_path="$(cd "$(dirname "${tgz_path}")" && pwd)/$(basename "${tgz_path}")"
+
     # Extract
     cd /usr/src
     local zdir
@@ -925,7 +931,16 @@ install_zimbra() {
     
     if [ -z "${zdir}" ]; then
         err "Could not read installer archive: ${tgz_path}"
-        err "The .tgz may be corrupt or truncated — re-download it and try again."
+        if [ ! -r "${tgz_path}" ]; then
+            err "The file is not readable — fix permissions and retry:"
+            err "    sudo chmod 644 '${tgz_path}'"
+        elif [ ! -s "${tgz_path}" ]; then
+            err "The file is empty — re-download or rebuild it."
+        else
+            err "The .tgz may be corrupt or truncated — re-download it and try again."
+            info "tar said:"
+            tar tzf "${tgz_path}" >/dev/null || true
+        fi
         exit 1
     fi
     
