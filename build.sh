@@ -1088,6 +1088,50 @@ configure_smtp_port() {
 
 # ── Section 4: SSL / Let's Encrypt ─────────────────────────
 
+# Best-effort public IP detection (diagnostics only — never fatal). Prefer the
+# explicitly-configured PUBLIC_IP, then fall back to a public echo service.
+detect_public_ip() {
+    if [ -n "${PUBLIC_IP}" ]; then echo "${PUBLIC_IP}"; return 0; fi
+    local ip
+    ip="$(wget -qO- --timeout=5 https://api.ipify.org 2>/dev/null || true)"
+    [ -z "${ip}" ] && ip="$(wget -qO- --timeout=5 https://ifconfig.me/ip 2>/dev/null || true)"
+    echo "${ip}"
+}
+
+# Reserved names that can never be issued a Let's Encrypt certificate.
+is_placeholder_domain() {
+    case "$1" in
+        example.com|*.example.com) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Pre-flight DNS check: warn (but don't fail — DNS may still be propagating)
+# if any SSL domain's A record doesn't resolve to this server's public IP.
+# certbot's own output remains the final arbiter.
+check_ssl_dns() {
+    local public_ip resolved bad=0
+    public_ip="$(detect_public_ip)"
+    if [ -z "${public_ip}" ]; then
+        info "Could not detect this server's public IP — skipping DNS pre-check"
+        return 0
+    fi
+    for d in "${SSL_DOMAINS[@]}"; do
+        resolved="$( { getent ahostsv4 "${d}" 2>/dev/null || getent ahosts "${d}" 2>/dev/null; } | awk '{print $1}' | sort -u | tr '\n' ' ')"
+        resolved="${resolved% }"
+        if [ -z "${resolved}" ]; then
+            warn "DNS: ${d} does not resolve — add an A record pointing to ${public_ip} (this server)"
+            bad=1
+        elif [[ " ${resolved} " != *" ${public_ip} "* ]]; then
+            warn "DNS: ${d} resolves to [${resolved}] but this server's public IP is ${public_ip}"
+            bad=1
+        else
+            info "DNS: ${d} → ${public_ip} (OK)"
+        fi
+    done
+    return "${bad}"
+}
+
 setup_letsencrypt() {
     if [ "${SKIP_SSL}" = "true" ]; then return 0; fi
     
@@ -1101,6 +1145,26 @@ setup_letsencrypt() {
         info "Certificate already exists for ${SSL_DOMAINS[0]}, skipping issuance."
         return 0
     fi
+    
+    # Fail fast on the default placeholder — example.com is IANA-reserved and
+    # can never be issued a certificate, so this is always a config mistake.
+    if is_placeholder_domain "${SSL_DOMAINS[0]}"; then
+        err "SSL_DOMAINS is still the placeholder '${SSL_DOMAINS[0]}'."
+        err "Set your real mail domain before installing — e.g. in scripts/install-config.env:"
+        err "    HOSTNAME=mail.yourdomain.com"
+        err "    DOMAIN=yourdomain.com"
+        err "    SSL_DOMAINS=(\"mail.yourdomain.com\")"
+        err "or re-run with SKIP_SSL=true to skip Let's Encrypt entirely."
+        return 1
+    fi
+    case "${LETSENCRYPT_EMAIL}" in
+        admin@example.com)
+            warn "LETSENCRYPT_EMAIL is the placeholder admin@example.com — certbot may reject it; set a real address"
+            ;;
+    esac
+    
+    # Warn (don't abort) if DNS doesn't yet point here — propagation can lag.
+    check_ssl_dns || true
     
     # Install certbot via python venv (most portable)
     cd /usr/src
@@ -1125,14 +1189,51 @@ setup_letsencrypt() {
         domain_args="${domain_args} -d ${d}"
     done
     
-    # Request certificate
+    # Request certificate — capture the full output instead of discarding it so
+    # a failure shows certbot's real reason (DNS, port 80, rate limit, ...).
+    local certbot_log="/var/log/letsencrypt-request.log"
     log "Requesting certificate for: ${SSL_DOMAINS[*]}"
-    dry certbot certonly --agree-tos -m "${LETSENCRYPT_EMAIL}" \
-        --key-type rsa --preferred-chain "ISRG Root X1" \
-        --standalone ${domain_args} -n 2>/dev/null || {
-        warn "certbot failed — check DNS points to this server"
+    if ! dry certbot certonly --agree-tos -m "${LETSENCRYPT_EMAIL}" \
+            --key-type rsa --preferred-chain "ISRG Root X1" \
+            --standalone ${domain_args} -n > "${certbot_log}" 2>&1; then
+        err "certbot failed for: ${SSL_DOMAINS[*]}"
+        err "Full output saved to: ${certbot_log}"
+        tail -n 25 "${certbot_log}" | sed 's/^/  /' >&2 || true
+        local public_ip
+        public_ip="$(detect_public_ip)"
+        err "Most common causes:"
+        err "  1. DNS: an A record for your domain must point to this server's public IP (${public_ip:-?}) — check with: dig +short ${SSL_DOMAINS[0]}"
+        err "  2. Port 80 must be reachable from the internet (check NAT/firewall rules)"
+        err "  3. Let's Encrypt rate limit (5 duplicate certificates per week per domain)"
+        warn "Restarting Zimbra proxy/mailbox services (stopped to free ports 80/443)..."
+        dry su - zimbra -c 'zmproxyctl start' 2>/dev/null || true
+        dry su - zimbra -c 'zmmailboxdctl start' 2>/dev/null || true
+        
+        # Fallback: offer to continue the install without SSL instead of
+        # aborting. Interactive runs get a y/N prompt; non-interactive runs
+        # (deploy over SSH without -t, cron, CI) can't prompt, so they honor
+        # the SSL_FAILURE env var — anything but "skip" keeps the abort.
+        local continue_without_ssl=""
+        if [ "${SSL_FAILURE:-abort}" = "skip" ]; then
+            continue_without_ssl="y"
+        elif [ -t 0 ]; then
+            warn "Certificate issuance failed, so HTTPS will not work yet."
+            read -rp "Continue the install without SSL? [y/N] " continue_without_ssl || true
+        fi
+        case "${continue_without_ssl}" in
+            y|Y|yes|YES)
+                SKIP_SSL=true
+                warn "Continuing install WITHOUT SSL (cert deployment is skipped too)."
+                warn "Fix the issues above, then obtain a certificate later via certbot"
+                warn "or re-run the installer once DNS/port 80 are ready."
+                return 0
+                ;;
+        esac
+        err "Aborting — SSL issuance failed and you chose not to skip it."
+        err "Re-run with '--skip-ssl' to skip Let's Encrypt entirely, or set"
+        err "SSL_FAILURE=skip to auto-continue without SSL when certbot fails (non-interactive runs)."
         return 1
-    }
+    fi
     
     # Add ISRG Root
     local cert_dir="/etc/letsencrypt/live/${SSL_DOMAINS[0]}"
@@ -1177,6 +1278,169 @@ deploy_ssl() {
     fi
     
     log "SSL deployed"
+}
+
+# ═══════════════════════════════════════════════════════════
+#  PRE-INSTALL CHECK (./build.sh check)
+# ═══════════════════════════════════════════════════════════
+
+# Global failure flag for the diagnostics command (set by chk_fail).
+CHECK_FAIL=0
+
+chk_ok()   { info "PASS  $*"; }
+chk_warn() { warn "WARN  $*"; }
+chk_fail() { err "FAIL  $*"; CHECK_FAIL=1; }
+
+# What (if anything) is listening on the local port 80. Prints the owning
+# process when it can be determined, "<listener>" otherwise, nothing if free.
+check_port80_local() {
+    local line=""
+    if command -v ss >/dev/null 2>&1; then
+        line="$(ss -ltn 2>/dev/null | awk '$4 ~ /:80$/ {print $4}' | head -1 || true)"
+    elif command -v netstat >/dev/null 2>&1; then
+        line="$(netstat -ltn 2>/dev/null | awk '$4 ~ /:80$/ {print $4}' | head -1 || true)"
+    fi
+    [ -n "${line}" ] && echo "${line}"
+    return 0
+}
+
+# Best-effort check that inbound TCP 80 is reachable from the internet, via the
+# public check-host.net API (no key needed). Never fatal — a timeout or API
+# outage only downgrades to a warning so the check command stays useful.
+check_port80_remote() {
+    local ip
+    ip="$(detect_public_ip)"
+    if [ -z "${ip}" ]; then
+        chk_warn "Could not detect this server's public IP — skipping internet port-80 check"
+        return 0
+    fi
+    
+    info "Checking inbound TCP 80 from the internet (check-host.net, best-effort)..."
+    local req req_id
+    req="$(wget -qO- --timeout=20 "https://check-host.net/check-tcp?host=${ip}:80&max_nodes=3" 2>/dev/null || true)"
+    req_id="$(echo "${req}" | grep -o '"request_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    if [ -z "${req_id}" ]; then
+        chk_warn "check-host.net unreachable from this server — skipping internet port-80 check"
+        return 0
+    fi
+    
+    # Poll for results: any node connecting proves reachability; only report
+    # failure once every node has errored (nodes finish at different times).
+    local result ok=0 err=0 attempts=1
+    while [ "${attempts}" -le 4 ]; do
+        sleep 6
+        result="$(wget -qO- --timeout=20 "https://check-host.net/check-result/${req_id}" 2>/dev/null || true)"
+        echo "${result}" | grep -q '"time"' && ok=1
+        echo "${result}" | grep -q '"error"' && err=1
+        [ "${ok}" = "1" ] && break
+        attempts=$((attempts + 1))
+    done
+    if [ "${ok}" = "1" ]; then
+        chk_ok "Port 80 reachable from the internet (${ip}:80)"
+        return 0
+    elif [ "${err}" = "1" ]; then
+        chk_fail "Port 80 NOT reachable from the internet (${ip}:80) — check NAT/port-forwarding/firewall"
+        return 1
+    else
+        chk_warn "check-host.net returned no result in time — re-run 'check' or verify manually"
+        return 0
+    fi
+}
+
+# Standalone pre-install diagnostics: validate config, DNS, port 80, and that
+# an installer .tgz is available. Prints a PASS/WARN/FAIL report and exits
+# non-zero if anything FAILed. Safe to run as a normal user.
+run_check() {
+    local cfg="${1:-}"
+    CHECK_FAIL=0   # reset so repeated runs in one process start clean
+    
+    echo -e "\n${BLUE}${BOLD}  ╔══════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}${BOLD}  ║${NC}       ${BOLD}Pre-Install Diagnostics${NC}               ${BLUE}${BOLD}║${NC}"
+    echo -e "${BLUE}${BOLD}  ╚══════════════════════════════════════════╝${NC}\n"
+    
+    if [ -z "${cfg}" ] && [ -f "${SCRIPT_DIR}/scripts/install-config.env" ]; then
+        cfg="${SCRIPT_DIR}/scripts/install-config.env"
+    fi
+    load_config "${cfg}"
+    
+    header "Configuration"
+    if is_placeholder_domain "${HOSTNAME}"; then
+        chk_fail "HOSTNAME is the placeholder '${HOSTNAME}' — set your real hostname (mail.yourdomain.com)"
+    else
+        chk_ok "HOSTNAME = ${HOSTNAME}"
+    fi
+    if is_placeholder_domain "${DOMAIN}"; then
+        chk_fail "DOMAIN is the placeholder '${DOMAIN}' — set your real email domain"
+    else
+        chk_ok "DOMAIN = ${DOMAIN}"
+    fi
+    if is_placeholder_domain "${SSL_DOMAINS[0]}"; then
+        chk_fail "SSL_DOMAINS[0] is the placeholder '${SSL_DOMAINS[0]}' — Let's Encrypt cannot issue for example.com"
+    else
+        chk_ok "SSL_DOMAINS = ${SSL_DOMAINS[*]}"
+    fi
+    if [ -z "${ZIMBRA_ADMIN_PASSWORD}" ]; then
+        chk_fail "ZIMBRA_ADMIN_PASSWORD is not set — the installer needs it"
+    else
+        chk_ok "ZIMBRA_ADMIN_PASSWORD is set (${#ZIMBRA_ADMIN_PASSWORD} characters)"
+    fi
+    case "${LETSENCRYPT_EMAIL}" in
+        admin@example.com|"")
+            chk_warn "LETSENCRYPT_EMAIL is empty/placeholder — certbot may reject the address"
+            ;;
+        *)
+            chk_ok "LETSENCRYPT_EMAIL = ${LETSENCRYPT_EMAIL}"
+            ;;
+    esac
+    if [ -z "${PUBLIC_IP}" ]; then
+        chk_warn "PUBLIC_IP not set — will be auto-detected during install"
+    else
+        chk_ok "PUBLIC_IP = ${PUBLIC_IP}"
+    fi
+    if [ "${RELAY_ENABLED}" = "true" ] && [ -z "${RELAY_HOST}" ]; then
+        chk_warn "RELAY_ENABLED=true but RELAY_HOST is empty — outbound relay will be skipped"
+    fi
+    
+    header "DNS (for SSL issuance)"
+    # A record must point at this server or the certbot step will abort the install.
+    if ! check_ssl_dns; then
+        CHECK_FAIL=1
+    fi
+    
+    header "Port 80"
+    local p80
+    p80="$(check_port80_local || true)"
+    if [ -z "${p80}" ]; then
+        chk_ok "Nothing is listening on port 80 locally — certbot standalone can bind it"
+    else
+        chk_warn "Something is listening on port 80 (${p80}) — the installer stops Zimbra proxy/mailboxd to free it, but check for other web servers (nginx/apache/webmin)"
+    fi
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+        chk_warn "ufw is active — ensure port 80 is allowed: sudo ufw allow 80/tcp"
+    elif command -v firewall-cmd >/dev/null 2>&1 && [ "$(firewall-cmd --state 2>/dev/null || true)" = "running" ]; then
+        chk_warn "firewalld is running — ensure port 80 is open: sudo firewall-cmd --add-service=http --permanent"
+    fi
+    check_port80_remote || true
+    
+    header "Installer"
+    local tgz
+    tgz="${ZIMBRA_TGZ_PATH:-}"
+    if [ -z "${tgz}" ]; then
+        tgz="$(find_newest_tgz || true)"
+    fi
+    if [ -n "${tgz}" ]; then
+        chk_ok "Installer found: ${tgz}"
+    else
+        chk_warn "No installer .tgz found (ZIMBRA_TGZ_PATH unset, nothing in ${BUILD_DIR}) — run './build.sh build' first"
+    fi
+    
+    header "Summary"
+    if [ "${CHECK_FAIL}" = "1" ]; then
+        err "One or more checks FAILED — fix the issues above, then re-run: ./build.sh check"
+        return 1
+    fi
+    log "All checks passed — ready to install (./build.sh install)"
+    return 0
 }
 
 # ── Section 5: Outbound Relay ──────────────────────────────
@@ -1364,6 +1628,9 @@ finalize() {
     if [ "${WEBMIN_ENABLED}" = "true" ]; then
         log "  Webmin:     https://${HOSTNAME}:10000"
     fi
+    if [ "${SKIP_SSL}" = "true" ]; then
+        log "  SSL:        SKIPPED — fix DNS/port 80, then run certbot or re-install to enable HTTPS"
+    fi
     log "============================================"
 }
 
@@ -1431,6 +1698,7 @@ show_help() {
     echo "Commands:"
     echo "  build       Build Zimbra FOSS installer (default)"
     echo "  install     Install Zimbra on this server (after a build, or standalone)"
+    echo "  check       Pre-install diagnostics: config, DNS, port 80, installer"
     echo "  deploy      Deploy installer to remote server via SSH"
     echo "  info        Show build configuration"
     echo "  clean       Remove build artifacts and images"
@@ -1469,6 +1737,7 @@ show_help() {
     echo "  ./build.sh                                    # Build latest + install here (as root)"
     echo "  ./build.sh build --skip-install               # Build only"
     echo "  ./build.sh install ./builds/zcs-*.tgz         # Install a specific build"
+    echo "  ./build.sh check [--config my.env]           # Pre-install diagnostics (safe as any user)"
     echo "  ./build.sh install --config my.env            # Install with custom config"
     echo "  ./build.sh build --version 10.1.16            # Build specific version"
     echo "  ./build.sh build --base-image rockylinux:9    # Build for Rocky Linux 9"
@@ -1566,6 +1835,18 @@ case "${COMMAND}" in
             warn "Build complete, but not running as root — skipping local install."
             warn "Run 'sudo ./build.sh install' to install here, or './build.sh deploy user@host'."
         fi
+        ;;
+    check|preflight|diagnose)
+        # NOTE: no `local` here — this runs at top level, not inside a function
+        cfg=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --config)  cfg="$2"; shift 2 ;;
+                -h|--help) show_help; exit 0 ;;
+                *)         err "Unknown option: $1"; show_help; exit 1 ;;
+            esac
+        done
+        run_check "${cfg}"
         ;;
     install)
         # NOTE: no `local` here — this runs at top level, not inside a function
