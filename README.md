@@ -629,6 +629,14 @@ Authentik is the central Oasis identity provider. Initial bootstrap and OIDC
 provider templates are documented in [`config/authentik/`](config/authentik/),
 with application integration guidance in [`docs/SSO.md`](docs/SSO.md).
 
+## Releases
+
+Oasis release tags use the `vMAJOR.MINOR.PATCH` format and are independent of
+Zimbra versions. The release workflow uses the repository variable
+`RELEASE_ZIMBRA_VERSION` for the builder, defaulting to `10.1.16`; configure that
+variable in GitHub before creating a release when a different valid Zimbra
+`X.Y.Z` version is required.
+
 ## Project status
 
 Oasis is under active development. The current release focuses on reproducible Zimbra FOSS builds and mail-server deployment. Authentik SSO, multi-tenancy, collaboration services, monitoring, compliance reporting, and migration tooling are planned platform components and are not yet included in this repository.

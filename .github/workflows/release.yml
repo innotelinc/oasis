@@ -1,0 +1,121 @@
+name: Release Oasis
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/oasis-zimbra-builder
+  # Oasis release tags (for example v0.1.0) are independent of the upstream
+  # Zimbra release. Configure this repository variable to a valid X.Y.Z Zimbra
+  # version, or use the stable default until the builder release is selected.
+  RELEASE_ZIMBRA_VERSION: ${{ vars.RELEASE_ZIMBRA_VERSION || '10.1.16' }}
+
+jobs:
+  validate:
+    name: Validate release inputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scripts and Compose
+        run: |
+          bash -n build.sh scripts/*.sh
+          python3 -m py_compile scripts/*.py
+          docker compose --env-file .env.example --profile local --profile production config
+
+  release:
+    name: Build and publish release
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=sha
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BASE_IMAGE=ubuntu:22.04
+            ZIMBRA_VERSION=${{ env.RELEASE_ZIMBRA_VERSION }}
+            BUILD_UID=1000
+            BUILD_GID=1000
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          artifact-name: oasis-zimbra-builder-${{ github.ref_name }}.spdx.json
+          output-file: oasis-zimbra-builder-${{ github.ref_name }}.spdx.json
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+      - name: Record release build configuration
+        run: |
+          printf 'Oasis release: %s\nZimbra builder version: %s\n' \
+            "$GITHUB_REF_NAME" "$RELEASE_ZIMBRA_VERSION" > release-build-info.txt
+
+      - name: Package Compose bundle
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/oasis-${version}
+          cp -a docker-compose.yml .env.example README.md config docs scripts systemd Dockerfile build.sh dist/oasis-${version}/
+          tar -C dist -czf "oasis-${version}-compose.tar.gz" "oasis-${version}"
+          sha256sum "oasis-${version}-compose.tar.gz" > "oasis-${version}-compose.tar.gz.sha256"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            oasis-*-compose.tar.gz
+            oasis-*.spdx.json
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            oasis-*-compose.tar.gz
+            oasis-*-compose.tar.gz.sha256
+            oasis-*.spdx.json
