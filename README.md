@@ -12,8 +12,8 @@ Built with **Docker** + **Zimbra zm-build** from official Zimbra FOSS source.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/innotelinc/oasis-email-platform.git
-cd mail-platform
+git clone https://github.com/innotelinc/oasis.git
+cd oasis
 
 # 2. (Optional) Configure
 cp .env.example .env   # edit with your preferences
@@ -270,8 +270,8 @@ If you don't want to depend on Google/Zoho, run emailrelay on any cheap VPS
 
 ```bash
 # 1. On the VPS (as root), install emailrelay as an authenticated relay:
-git clone https://github.com/innotelinc/oasis-email-platform.git
-cd mail-platform/scripts && sudo bash setup-vps-relay.sh
+git clone https://github.com/innotelinc/oasis.git
+cd oasis/scripts && sudo bash setup-vps-relay.sh
 
 # 2. It prints RELAY_HOST / RELAY_USER / RELAY_PASSWORD — put them in install-config.env:
 RELAY_ENABLED=true
