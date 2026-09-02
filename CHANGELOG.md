@@ -4,6 +4,11 @@ All notable changes to Oasis are documented here.
 
 ## [0.1.0] - 2026-09-02
 
+### Fixed
+
+- Prevented Oasis `vMAJOR.MINOR.PATCH` tags from being passed to the Zimbra builder as Zimbra versions.
+- Added release-time validation for the configured `RELEASE_ZIMBRA_VERSION` value.
+
 ### Added
 
 - Initial Oasis deployment foundation based on Docker Compose.
@@ -18,7 +23,7 @@ All notable changes to Oasis are documented here.
 - Authentik bootstrap, OIDC provider, SSO, backup, systemd, and Capstone reuse documentation.
 - GitHub Actions CI with ShellCheck, Python, Compose, YAML, and secret scanning.
 - Tagged release workflow with GHCR image publishing, SBOM generation, vulnerability scanning, provenance attestations, checksums, and Compose bundle assets.
-- Separate Oasis release versioning from the upstream Zimbra builder version through `RELEASE_ZIMBRA_VERSION`.
+- Separate Oasis release versioning from the upstream Zimbra builder version through the repository-controlled `RELEASE_ZIMBRA_VERSION=10.1.16` default and optional manual workflow input.
 
 ### Security
 
