@@ -1,0 +1,16 @@
+[Unit]
+Description=Oasis communication platform
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__OASIS_ROOT__
+ExecStart=/usr/bin/docker compose --profile ${OASIS_MODE:-local} up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --profile ${OASIS_MODE:-local} down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

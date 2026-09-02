@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ┌──────────────────────────────────────────────────────────┐
-# │  Zimbra FOSS Builder — Entrypoint                        │
+# │  Oasis — Zimbra FOSS Builder Entrypoint                  │
 # │  Detects OS, resolves latest version, runs zm-build      │
 # └──────────────────────────────────────────────────────────┘
 
@@ -179,7 +179,7 @@ git_clone_retry() {
 
 do_build() {
     log "============================================"
-    log "  Zimbra FOSS Builder"
+    log "  Oasis Zimbra FOSS Builder"
     log "  Version: ${ZIMBRA_VERSION}"
     log "  Release: ${BUILD_RELEASE}"
     log "  Target:  ${BUILD_OS}"

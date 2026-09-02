@@ -1,5 +1,5 @@
 # ┌──────────────────────────────────────────────────────────┐
-# │  Zimbra FOSS Builder — Multi-Distro Docker Image         │
+# │  Oasis — Zimbra FOSS Builder Multi-Distro Image         │
 # │  Builds the latest Zimbra FOSS installer from source     │
 # │  using zm-build. Supports any Linux OS as target.        │
 # └──────────────────────────────────────────────────────────┘
@@ -15,9 +15,9 @@
 ARG BASE_IMAGE=ubuntu:22.04
 FROM ${BASE_IMAGE}
 
-LABEL org.opencontainers.image.title="Zimbra FOSS Builder"
-LABEL org.opencontainers.image.description="Multi-distro container to build Zimbra FOSS from source via zm-build"
-LABEL org.opencontainers.image.source="https://github.com/Zimbra/zm-build"
+LABEL org.opencontainers.image.title="Oasis Zimbra FOSS Builder"
+LABEL org.opencontainers.image.description="Oasis build container for reproducible Zimbra FOSS packages"
+LABEL org.opencontainers.image.source="https://github.com/innotelinc/oasis-email-platform"
 
 # ── Re-declared ARGs (required after FROM for scope) ───────
 ARG ZIMBRA_VERSION=latest

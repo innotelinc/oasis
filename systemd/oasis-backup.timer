@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Oasis data backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=oasis-backup.service
+
+[Install]
+WantedBy=timers.target
