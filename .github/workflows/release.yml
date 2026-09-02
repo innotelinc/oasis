@@ -19,7 +19,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/oasis-zimbra-builder
+  IMAGE_NAME: ${{ github.repository_owner }}/oasis/zimbra-builder
   # Oasis release tags are independent of the upstream Zimbra release. Keep the
   # default in version control so releases work without repository settings.
   # Override deliberately with workflow_dispatch inputs if that trigger is

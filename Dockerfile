@@ -17,7 +17,7 @@ FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.title="Oasis Zimbra FOSS Builder"
 LABEL org.opencontainers.image.description="Oasis build container for reproducible Zimbra FOSS packages"
-LABEL org.opencontainers.image.source="https://github.com/innotelinc/oasis-email-platform"
+LABEL org.opencontainers.image.source="https://github.com/innotelinc/oasis"
 
 # ── Re-declared ARGs (required after FROM for scope) ───────
 ARG ZIMBRA_VERSION=latest
