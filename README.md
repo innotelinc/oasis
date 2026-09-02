@@ -632,10 +632,10 @@ with application integration guidance in [`docs/SSO.md`](docs/SSO.md).
 ## Releases
 
 Oasis release tags use the `vMAJOR.MINOR.PATCH` format and are independent of
-Zimbra versions. The release workflow uses the repository variable
-`RELEASE_ZIMBRA_VERSION` for the builder, defaulting to `10.1.16`; configure that
-variable in GitHub before creating a release when a different valid Zimbra
-`X.Y.Z` version is required.
+Zimbra versions. The release workflow uses the repository-controlled default
+`RELEASE_ZIMBRA_VERSION=10.1.16` for the builder. No GitHub repository variable
+is required. Releases can be run from the Actions UI with a different valid
+Zimbra `X.Y.Z` version using the `workflow_dispatch` input.
 
 ## Project status
 

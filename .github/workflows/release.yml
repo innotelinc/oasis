@@ -3,6 +3,13 @@ name: Release Oasis
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      zimbra_version:
+        description: 'Upstream Zimbra X.Y.Z version to build'
+        required: true
+        default: '10.1.16'
+        type: string
 
 permissions:
   contents: write
@@ -13,10 +20,11 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/oasis-zimbra-builder
-  # Oasis release tags (for example v0.1.0) are independent of the upstream
-  # Zimbra release. Configure this repository variable to a valid X.Y.Z Zimbra
-  # version, or use the stable default until the builder release is selected.
-  RELEASE_ZIMBRA_VERSION: ${{ vars.RELEASE_ZIMBRA_VERSION || '10.1.16' }}
+  # Oasis release tags are independent of the upstream Zimbra release. Keep the
+  # default in version control so releases work without repository settings.
+  # Override deliberately with workflow_dispatch inputs if that trigger is
+  # added later; never derive this from github.ref_name.
+  RELEASE_ZIMBRA_VERSION: '10.1.16'
 
 jobs:
   validate:
@@ -59,6 +67,15 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Validate Zimbra builder version
+        run: |
+          zimbra_version="${{ inputs.zimbra_version || env.RELEASE_ZIMBRA_VERSION }}"
+          if ! [[ "$zimbra_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Zimbra version must be X.Y.Z, got: $zimbra_version" >&2
+            exit 1
+          fi
+          echo "RELEASE_ZIMBRA_VERSION=$zimbra_version" >> "$GITHUB_ENV"
+
       - name: Build and push builder image
         uses: docker/build-push-action@v6
         with:
@@ -69,7 +86,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BASE_IMAGE=ubuntu:22.04
-            ZIMBRA_VERSION=${{ env.RELEASE_ZIMBRA_VERSION }}
+            ZIMBRA_VERSION=${{ inputs.zimbra_version || env.RELEASE_ZIMBRA_VERSION }}
             BUILD_UID=1000
             BUILD_GID=1000
           cache-from: type=gha
@@ -79,6 +96,7 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          registry: ${{ env.REGISTRY }}
           artifact-name: oasis-zimbra-builder-${{ github.ref_name }}.spdx.json
           output-file: oasis-zimbra-builder-${{ github.ref_name }}.spdx.json
 
