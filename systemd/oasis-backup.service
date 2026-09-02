@@ -1,0 +1,10 @@
+[Unit]
+Description=Oasis data backup
+Requires=docker.service oasis.service
+After=docker.service oasis.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__OASIS_ROOT__
+EnvironmentFile=-__OASIS_ROOT__/.env
+ExecStart=/usr/bin/env bash -c 'BACKUP_DIR="${BACKUP_DIR:-__OASIS_ROOT__/backups}" POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" REDIS_PASSWORD="${REDIS_PASSWORD}" __OASIS_ROOT__/scripts/backup-oasis.sh'

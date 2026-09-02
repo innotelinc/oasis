@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ┌──────────────────────────────────────────────────────────┐
-# │  Zimbra FOSS Builder + Installer — One-command script    │
+# │  Oasis — Zimbra FOSS Builder + Installer                 │
 # │  Builds the Zimbra installer for any Linux OS via Docker │
 # │  then installs it on the mail server.                    │
 # │                                                          │
@@ -103,7 +103,7 @@ fi
 banner() {
     echo ""
     echo -e "${BLUE}  ╔══════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}  ║${NC}       ${BOLD}Zimbra FOSS Builder${NC}                      ${BLUE}║${NC}"
+    echo -e "${BLUE}  ║${NC}       ${BOLD}Oasis Zimbra FOSS Builder${NC}                      ${BLUE}║${NC}"
     echo -e "${BLUE}  ║${NC}    Build Zimbra from source in Docker       ${BLUE}║${NC}"
     echo -e "${BLUE}  ╚══════════════════════════════════════════════╝${NC}"
     echo ""

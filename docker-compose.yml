@@ -1,10 +1,139 @@
-# ┌──────────────────────────────────────────────────────────┐
-# │  Zimbra FOSS Builder — docker-compose.yml                │
-# │  Easy mode: docker compose up --build                    │
-# └──────────────────────────────────────────────────────────┘
+# Oasis infrastructure stack
+#
+# Default local development:
+#   docker compose --profile local up -d
+# Production HTTPS with ACME certificates:
+#   docker compose --profile production up -d
+# The Zimbra source builder is opt-in:
+#   docker compose --profile builder up --build
+
+x-authentik-environment: &authentik-environment
+  AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?Set AUTHENTIK_SECRET_KEY in .env}
+  AUTHENTIK_POSTGRESQL__HOST: postgres
+  AUTHENTIK_POSTGRESQL__PORT: 5432
+  AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-authentik}
+  AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER:-authentik}
+  AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  AUTHENTIK_REDIS__HOST: redis
+  AUTHENTIK_REDIS__PORT: 6379
+  AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+  AUTHENTIK_ERROR_REPORTING__ENABLED: ${AUTHENTIK_ERROR_REPORTING_ENABLED:-false}
 
 services:
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: oasis-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-authentik}
+      POSTGRES_USER: ${POSTGRES_USER:-authentik}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [oasis-backend]
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: oasis-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    networks: [oasis-backend]
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    container_name: oasis-authentik-server
+    restart: unless-stopped
+    command: server
+    environment: *authentik-environment
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:9000/-/health/ready/\")'"]
+      interval: 15s
+      start_period: 30s
+      timeout: 5s
+      retries: 10
+    networks: [oasis-backend, oasis-proxy]
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    container_name: oasis-authentik-worker
+    restart: unless-stopped
+    command: worker
+    environment: *authentik-environment
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [oasis-backend]
+
+  reverse-proxy-local:
+    profiles: [local]
+    image: nginx:1.27.3-alpine
+    container_name: oasis-reverse-proxy-local
+    restart: unless-stopped
+    ports:
+      - "${HTTP_BIND:-8080}:80"
+    volumes:
+      - ./config/nginx/oasis-local.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      authentik-server: { condition: service_healthy }
+    networks: [oasis-proxy]
+
+  reverse-proxy:
+    profiles: [production]
+    image: nginx:1.27.3-alpine
+    container_name: oasis-reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "${HTTP_BIND:-80}:80"
+      - "${HTTPS_BIND:-443}:443"
+    volumes:
+      - ./config/nginx/oasis.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - certbot-etc:/etc/letsencrypt:ro
+    depends_on:
+      authentik-server: { condition: service_healthy }
+    networks: [oasis-proxy]
+
+  certbot:
+    profiles: [production]
+    image: certbot/certbot:v3.1.0
+    container_name: oasis-certbot
+    restart: unless-stopped
+    entrypoint: /bin/sh
+    command: -c 'trap exit TERM; while :; do certbot renew --webroot --webroot-path /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - certbot-etc:/etc/letsencrypt
+    networks: [oasis-proxy]
+
   zimbra-builder:
+    profiles: [builder]
     build:
       context: .
       dockerfile: Dockerfile
@@ -14,27 +143,27 @@ services:
         BUILD_UID: "${BUILD_UID:-1000}"
         BUILD_GID: "${BUILD_GID:-1000}"
         TZ: "${TZ:-Etc/UTC}"
-    image: "zimbra-builder:local-zimbra${ZIMBRA_VERSION:-latest}"
-    container_name: zimbra-builder
+    image: "oasis/zimbra-builder:local-${ZIMBRA_VERSION:-latest}"
+    container_name: oasis-zimbra-builder
     environment:
-      - ZIMBRA_VERSION=${ZIMBRA_VERSION:-latest}
-      - FORCE_REBUILD=${FORCE_REBUILD:-false}
+      ZIMBRA_VERSION: ${ZIMBRA_VERSION:-latest}
+      FORCE_REBUILD: ${FORCE_REBUILD:-false}
     volumes:
       - ./builds:/home/build/installer-build/BUILDS:rw
-
-    # Public DNS fallback — hosts whose /etc/resolv.conf points at the
-    # systemd-resolved stub (127.0.0.53) can't resolve from inside the
-    # container. Override via .env (DOCKER_DNS1 / DOCKER_DNS2), e.g. for
-    # corporate/VPN DNS.
     dns:
       - ${DOCKER_DNS1:-8.8.8.8}
       - ${DOCKER_DNS2:-1.1.1.1}
-
     command: ["--build"]
-    
-    # Resource limits (optional — uncomment to constrain)
-    # deploy:
-    #   resources:
-    #     limits:
-    #       memory: 8G
-    #       cpus: '4'
+
+volumes:
+  postgres-data:
+  redis-data:
+  authentik-media:
+  authentik-templates:
+  certbot-webroot:
+  certbot-etc:
+
+networks:
+  oasis-backend:
+    internal: true
+  oasis-proxy:

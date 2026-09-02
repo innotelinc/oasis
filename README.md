@@ -1,6 +1,8 @@
-# Innotel Mail Platform &bull; [mail.innotel.us](https://mail.innotel.us)
+# Oasis — Open Enterprise Communication Platform
 
-Build the latest Zimbra FOSS (Free and Open Source Software) installer from source using Docker, then deploy and install it on your mail server — all from one tool. Works for **any Linux OS** — Ubuntu, Debian, Rocky Linux, AlmaLinux, Oracle Linux, RHEL.
+[Oasis](https://oasis.innotel.us) is an open-source deployment foundation for enterprise email and collaboration services.
+
+The current repository provides a Dockerized Zimbra FOSS build and deployment foundation for Oasis. It is the first implementation slice toward the broader Oasis platform, with email transport, identity, calendar, contacts, files, automation, administration, and observability delivered incrementally.
 
 Built with **Docker** + **Zimbra zm-build** from official Zimbra FOSS source.
 
@@ -10,7 +12,7 @@ Built with **Docker** + **Zimbra zm-build** from official Zimbra FOSS source.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/innotelinc/mail-platform.git
+git clone https://github.com/innotelinc/oasis-email-platform.git
 cd mail-platform
 
 # 2. (Optional) Configure
@@ -268,7 +270,7 @@ If you don't want to depend on Google/Zoho, run emailrelay on any cheap VPS
 
 ```bash
 # 1. On the VPS (as root), install emailrelay as an authenticated relay:
-git clone https://github.com/innotelinc/mail-platform.git
+git clone https://github.com/innotelinc/oasis-email-platform.git
 cd mail-platform/scripts && sudo bash setup-vps-relay.sh
 
 # 2. It prints RELAY_HOST / RELAY_USER / RELAY_PASSWORD — put them in install-config.env:
@@ -589,4 +591,48 @@ newgrp docker
 
 ---
 
-Proprietary — Innotel Inc.
+## Host lifecycle
+
+Single-node deployments can use the systemd installer and units documented in
+[`docs/SYSTEMD.md`](docs/SYSTEMD.md). The lifecycle scripts preserve `.env` and
+backups by default and require explicit confirmation for upgrades or removal.
+
+## Setup and operational checks
+
+The Capstone repository was used as an operational reference for idempotent
+setup and smoke-test patterns. Oasis-specific adaptations are documented in
+[`docs/CAPSTONE-REUSE.md`](docs/CAPSTONE-REUSE.md).
+
+For a local bootstrap:
+
+```bash
+OASIS_MODE=local scripts/setup-oasis.sh
+scripts/smoke-oasis.sh local
+```
+
+For production, configure DNS and ACME settings first:
+
+```bash
+OASIS_MODE=production scripts/setup-oasis.sh
+scripts/init-certificates.sh
+scripts/smoke-oasis.sh production
+```
+
+## Operations
+
+Backup, restore, health-check, retention, and disaster-recovery procedures are
+documented in [`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md).
+
+## Identity and SSO
+
+Authentik is the central Oasis identity provider. Initial bootstrap and OIDC
+provider templates are documented in [`config/authentik/`](config/authentik/),
+with application integration guidance in [`docs/SSO.md`](docs/SSO.md).
+
+## Project status
+
+Oasis is under active development. The current release focuses on reproducible Zimbra FOSS builds and mail-server deployment. Authentik SSO, multi-tenancy, collaboration services, monitoring, compliance reporting, and migration tooling are planned platform components and are not yet included in this repository.
+
+## Licensing
+
+This repository should include an explicit open-source license before public release. Upstream Zimbra, emailrelay, Docker base images, and other dependencies retain their own licenses; consult their notices before redistribution.
