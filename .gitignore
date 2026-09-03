@@ -1,6 +1,13 @@
 # Build output
 builds/
 
+# Health/compliance reports
+reports/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Environment files with secrets
 .env
 install-config.env

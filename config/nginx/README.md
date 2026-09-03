@@ -49,3 +49,44 @@ For multiple Oasis hostnames, add each hostname to the production Nginx
 challenge automation should be used instead when port 80 cannot be exposed;
 provider credentials must be supplied through Docker secrets or an external
 secret manager, never committed to this repository.
+
+## Nginx Proxy Manager edge
+
+For deployments that terminate the public Oasis hostnames with Nginx Proxy
+Manager (NPM), `scripts/npm-proxy-hosts.py` creates the proxy hosts for
+`app`, `api`, `auth`, `mail`, `files`, and `admin` under `OASIS_BASE_DOMAIN`
+through the NPM API. The same call provisions the HTTPS certificate:
+
+- **Wildcard (default):** with `NPM_DNS_PROVIDER` and `NPM_DNS_CREDENTIALS`
+  set, a `*.<domain>` Let's Encrypt certificate is requested via the DNS-01
+  challenge, and `OASIS_WILDCARD_SSL=true` (default) attaches it to every
+  host.
+- **Per-hostname fallback:** without DNS credentials, one Let's Encrypt SAN
+  certificate covering the selected hostnames is requested via HTTP-01
+  (requires inbound port 80).
+
+```dotenv
+OASIS_BASE_DOMAIN=oasis.innotel.us
+OASIS_WILDCARD_SSL=true
+NPM_API_URL=http://127.0.0.1:81
+NPM_UPSTREAM_HOST=host.docker.internal
+NPM_API_TOKEN=...            # or NPM_ADMIN_EMAIL + NPM_ADMIN_PASSWORD
+ACME_EMAIL=admin@oasis.innotel.us
+NPM_DNS_PROVIDER=cloudflare  # wildcard DNS-01
+NPM_DNS_CREDENTIALS=dns_cloudflare_api_token=...
+```
+
+Then either run the sync manually or let `scripts/setup-oasis.sh` do it in
+production mode:
+
+```bash
+python3 scripts/npm-proxy-hosts.py --check   # read-only drift report
+python3 scripts/npm-proxy-hosts.py           # apply, idempotent
+python3 scripts/npm-proxy-hosts.py --no-prune
+python3 scripts/npm-proxy-hosts.py --no-wildcard   # force HTTP-01 SAN cert
+```
+
+The compose proxy in this directory remains the Authentik stack gateway; NPM
+hosts forward to the Oasis module ports (`app` 3000, `api` 8000, `auth` 9000,
+`mail` 8080, `files` 8081, `admin` 3001). Both can coexist: NPM terminates
+public hostnames while the compose proxy serves the stack internally.
