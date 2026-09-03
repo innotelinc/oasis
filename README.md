@@ -11,8 +11,8 @@ mail host — Let's Encrypt SSL, smarthost relay for ISP port-25 blocks, and ver
 built in. Email transport, identity, calendar, contacts, files, automation, administration,
 and observability land incrementally on top.
 
-[![CI](https://github.com/innotelinc/mail-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/mail-platform/actions/workflows/ci.yml)
-[![Release](https://github.com/innotelinc/mail-platform/actions/workflows/release.yml/badge.svg)](https://github.com/innotelinc/mail-platform/actions/workflows/release.yml)
+[![CI](https://github.com/innotelinc/oasis/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/ci.yml)
+[![Release](https://github.com/innotelinc/oasis/actions/workflows/release.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 *Mail that is yours — from source to inbox.*
@@ -23,7 +23,7 @@ and observability land incrementally on top.
 > current Zimbra FOSS release from source inside Docker, then deploy it to any Linux server
 > with one command — SSL, outbound relay, and post-install verification included. The
 > broader Oasis platform (identity, collaboration, observability) builds on this foundation.
-> **Landing page:** [github.com/innotelinc/mail-platform](https://github.com/innotelinc/mail-platform)
+> **Landing page:** [github.com/innotelinc/oasis](https://github.com/innotelinc/oasis)
 
 ---
 
@@ -44,8 +44,8 @@ and observability land incrementally on top.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/innotelinc/mail-platform
-cd mail-platform
+git clone https://github.com/innotelinc/oasis
+cd oasis
 
 # 2. (Optional) Configure
 cp .env.example .env   # edit with your preferences
