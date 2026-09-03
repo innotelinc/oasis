@@ -175,3 +175,13 @@ before redistribution.
 ---
 
 *Oasis — enterprise mail, self-hosted from source.*
+
+## 🏛️ Platform stack
+
+Oasis is the ecosystem's **MailOps** platform — email, calendars, contacts, and collaboration in the
+[**Innotel Platform Stack**](https://github.com/innotelinc/innotel-platform-stack) — the
+canonical single-responsibility architecture where Authentik owns identity, Infisical owns
+secrets, Cerulean owns trust, ONYX owns storage, Magnate owns revenue, and every other
+platform is a business function that consumes them. See
+[docs/stack.md](docs/stack.md) for this platform's owns/consumes boundaries and its
+Infisical secret setup.
