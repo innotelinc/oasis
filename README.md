@@ -416,8 +416,19 @@ After a successful build, the installer lands in `./builds/`:
 ├── Dockerfile                # Multi-distro builder image
 ├── docker-compose.yml        # Docker Compose for easy builds
 ├── .env.example              # Environment config template
+├── LICENSE                   # MIT license
 └── scripts/
     ├── entrypoint.sh         # Container entrypoint (detect OS, run zm-build)
+    ├── setup-oasis.sh        # Idempotent local/production stack bootstrap
+    ├── npm-proxy-hosts.py    # NPM host + wildcard certificate provisioning
+    ├── init-certificates.sh  # First-time production certificate issuance
+    ├── oasis-health.sh       # Domain health monitoring and compliance report
+    ├── migrate-mailboxes.sh  # Exchange/Google/Zimbra mailbox migration
+    ├── backup-oasis.sh       # PostgreSQL/Redis/Authentik backup
+    ├── restore-oasis.sh      # Restore from a backup archive
+    ├── upgrade-oasis.sh      # In-place stack upgrade
+    ├── uninstall-oasis.sh    # Remove systemd services (preserves data)
+    ├── smoke-oasis.sh        # Post-bootstrap smoke test
     ├── setup-vps-relay.sh    # emailrelay outbound relay for your VPS (port 25)
     ├── verify.sh             # Post-install verification
     └── install-config.env    # Install configuration template (gitignored)
@@ -597,12 +608,6 @@ Single-node deployments can use the systemd installer and units documented in
 [`docs/SYSTEMD.md`](docs/SYSTEMD.md). The lifecycle scripts preserve `.env` and
 backups by default and require explicit confirmation for upgrades or removal.
 
-## Setup and operational checks
-
-The Capstone repository was used as an operational reference for idempotent
-setup and smoke-test patterns. Oasis-specific adaptations are documented in
-[`docs/CAPSTONE-REUSE.md`](docs/CAPSTONE-REUSE.md).
-
 For a local bootstrap:
 
 ```bash
@@ -615,13 +620,54 @@ For production, configure DNS and ACME settings first:
 ```bash
 OASIS_MODE=production scripts/setup-oasis.sh
 scripts/init-certificates.sh
+scripts/oasis-health.sh --report
 scripts/smoke-oasis.sh production
 ```
 
+## Edge hostnames and certificates
+
+`scripts/npm-proxy-hosts.py` provisions the public Oasis hostnames in Nginx
+Proxy Manager through its API:
+
+| Hostname | Service |
+|---|---|
+| `app.<domain>` | Oasis web application |
+| `api.<domain>` | Oasis API |
+| `auth.<domain>` | Authentik identity provider |
+| `mail.<domain>` | Oasis webmail |
+| `files.<domain>` | Oasis file service |
+| `admin.<domain>` | Oasis administration |
+
+It is idempotent, supports `--check` for drift inspection and `--no-prune` to
+keep stale hosts. It also requests the HTTPS certificate through the same API:
+with `NPM_DNS_PROVIDER` + `NPM_DNS_CREDENTIALS` set it provisions a
+**wildcard** `*.<domain>` Let's Encrypt certificate via DNS-01 (the default);
+otherwise it requests one SAN certificate covering the hostnames via HTTP-01.
+Configured credentials (`NPM_API_URL`, `NPM_API_TOKEN` or
+`NPM_ADMIN_EMAIL`/`NPM_ADMIN_PASSWORD`, `ACME_EMAIL`) in `.env` are detected
+by `scripts/setup-oasis.sh`, which runs the sync automatically in production
+mode. See `config/nginx/README.md`.
+
+## Health monitoring and compliance
+
+`scripts/oasis-health.sh` checks the six module hostnames plus the base
+domain's mail posture — MX, SPF, DKIM, DMARC, TLS certificate validity, and
+SMTP/IMAP port reachability — with PASS/WARN/FAIL output, exit codes for
+cron, `--json` summaries, and dated Markdown compliance reports (`--report`).
+See [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md).
+
+## Migration
+
+Exchange, Google Workspace, and Zimbra mailboxes can be moved onto Oasis with
+`scripts/migrate-mailboxes.sh` (imapsync-based, Docker fallback, per-provider
+presets and never exposes passwords on the command line). Calendar, contacts,
+and files are covered by the export/import paths in
+[`docs/MIGRATION.md`](docs/MIGRATION.md).
+
 ## Operations
 
-Backup, restore, health-check, retention, and disaster-recovery procedures are
-documented in [`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md).
+Backup, restore, retention, and disaster-recovery procedures are documented in
+[`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md).
 
 ## Identity and SSO
 
@@ -639,8 +685,17 @@ Zimbra `X.Y.Z` version using the `workflow_dispatch` input.
 
 ## Project status
 
-Oasis is under active development. The current release focuses on reproducible Zimbra FOSS builds and mail-server deployment. Authentik SSO, multi-tenancy, collaboration services, monitoring, compliance reporting, and migration tooling are planned platform components and are not yet included in this repository.
+Oasis is under active development. The current release provides reproducible
+Zimbra FOSS builds, mail-server deployment, the Authentik-backed identity
+stack with Docker Compose, NPM edge provisioning with wildcard certificates,
+domain health monitoring and compliance reporting, mailbox migration
+tooling, backup/restore, and systemd lifecycle management. Production mail,
+calendar, contacts, and file-sharing are delivered by the deployed Zimbra
+mail server behind the module hostnames; multi-tenancy, automation, and
+administration modules are planned components delivered incrementally.
 
 ## Licensing
 
-This repository should include an explicit open-source license before public release. Upstream Zimbra, emailrelay, Docker base images, and other dependencies retain their own licenses; consult their notices before redistribution.
+Oasis is released under the [MIT License](LICENSE). Upstream Zimbra, imapsync,
+emailrelay, Docker base images, and other dependencies retain their own
+licenses; consult their notices before redistribution.

@@ -62,10 +62,32 @@ if [ "${OASIS_START:-true}" = true ]; then
   pass "Oasis services started with profile: $MODE"
 fi
 
+# Nginx Proxy Manager edge integration. When NPM credentials are configured,
+# provision the Oasis hostnames (app, api, auth, mail, files, admin) and the
+# Let's Encrypt certificate through the NPM API. Skipped in local mode where
+# no public DNS or NPM instance exists. Never fails setup: NPM is an external
+# dependency that may legitimately be provisioned later.
+if [ "$MODE" = production ] && [ "${OASIS_NPM_SYNC:-auto}" != false ]; then
+  if [ -n "${NPM_API_TOKEN:-}${NPM_ADMIN_EMAIL:-}${NPM_ADMIN_PASSWORD:-}" ]; then
+    warn "Synchronizing Oasis hostnames and certificates with Nginx Proxy Manager..."
+    if python3 "$ROOT/scripts/npm-proxy-hosts.py" --check; then
+      python3 "$ROOT/scripts/npm-proxy-hosts.py" \
+        || warn "NPM provisioning reported errors; rerun scripts/npm-proxy-hosts.py after fixing them"
+    else
+      warn "NPM drift check failed (is NPM reachable at ${NPM_API_URL:-http://127.0.0.1:81}?); skipping host provisioning"
+    fi
+  else
+    warn "NPM credentials not configured (NPM_API_TOKEN or NPM_ADMIN_EMAIL/NPM_ADMIN_PASSWORD); skipping host provisioning"
+  fi
+elif [ "$MODE" = local ]; then
+  warn "Local mode: Nginx Proxy Manager host provisioning is only run in production mode"
+fi
+
 echo
 echo "Next steps:"
 if [ "$MODE" = production ]; then
   echo "  scripts/init-certificates.sh"
+  echo "  scripts/oasis-health.sh --report   # domain/MX/SPF/DKIM/DMARC/TLS health and compliance report"
   echo "  Open https://${AUTH_DOMAIN:-auth.oasis.innotel.us}/if/initial-setup/"
 else
   echo "  Open http://localhost:8080/if/initial-setup/"
