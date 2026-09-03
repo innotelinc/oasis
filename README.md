@@ -11,8 +11,8 @@ mail host — Let's Encrypt SSL, smarthost relay for ISP port-25 blocks, and ver
 built in. Email transport, identity, calendar, contacts, files, automation, administration,
 and observability land incrementally on top.
 
-[![CI](https://innotelinc.github.io/oasis/actions/workflows/ci.yml/badge.svg)](https://innotelinc.github.io/oasis/actions/workflows/ci.yml)
-[![Release](https://innotelinc.github.io/oasis/actions/workflows/release.yml/badge.svg)](https://innotelinc.github.io/oasis/actions/workflows/release.yml)
+[![CI](https://github.com/innotelinc/oasis/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/ci.yml)
+[![Release](https://github.com/innotelinc/oasis/actions/workflows/release.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 *Mail that is yours — from source to inbox.*
