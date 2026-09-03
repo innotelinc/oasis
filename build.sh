@@ -16,6 +16,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
 cd "${SCRIPT_DIR}"
 
+# Enable the version-controlled commit-guard hooks (.githooks) if this is a
+# git checkout (blocks attribution to anyone but Darnel Hunter).
+if [ -d "${SCRIPT_DIR}/.githooks" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git config core.hooksPath "${SCRIPT_DIR}/.githooks"
+  printf '\033[1;32m[oasis]\033[0m commit guard hook enabled (core.hooksPath -> .githooks)\n'
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
 
