@@ -1,19 +1,51 @@
-# Oasis — Open Enterprise Communication Platform
+<div align="center">
 
-[Oasis](https://oasis.innotel.us) is an open-source deployment foundation for enterprise email and collaboration services.
+# 🌴 Oasis — Open Enterprise Communication Platform
 
-The current repository provides a Dockerized Zimbra FOSS build and deployment foundation for Oasis. It is the first implementation slice toward the broader Oasis platform, with email transport, identity, calendar, contacts, files, automation, administration, and observability delivered incrementally.
+**Build and deploy Zimbra FOSS from source — one command, any Linux mail server.**
 
-Built with **Docker** + **Zimbra zm-build** from official Zimbra FOSS source.
+Oasis is an open-source deployment foundation for enterprise email and collaboration. This
+repo is the first slice of the platform: a **Dockerized Zimbra FOSS build** (from official
+source via `zm-build`) plus an idempotent installer that turns a bare server into a working
+mail host — Let's Encrypt SSL, smarthost relay for ISP port-25 blocks, and verification
+built in. Email transport, identity, calendar, contacts, files, automation, administration,
+and observability land incrementally on top.
+
+[![CI](https://github.com/innotelinc/mail-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/mail-platform/actions/workflows/ci.yml)
+[![Release](https://github.com/innotelinc/mail-platform/actions/workflows/release.yml/badge.svg)](https://github.com/innotelinc/mail-platform/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+*Mail that is yours — from source to inbox.*
+
+</div>
+
+> **About Oasis** — a self-hosted, open-source enterprise communication platform. Build a
+> current Zimbra FOSS release from source inside Docker, then deploy it to any Linux server
+> with one command — SSL, outbound relay, and post-install verification included. The
+> broader Oasis platform (identity, collaboration, observability) builds on this foundation.
+> **Landing page:** [github.com/innotelinc/mail-platform](https://github.com/innotelinc/mail-platform)
 
 ---
 
-## Quick Start
+## ✨ Highlights
+
+| | | |
+|---|---|---|
+| 🐳 **Source-built Zimbra** | Official `zm-build` inside Docker — reproducible `zcs-*.tgz` installers for Ubuntu, Debian, Rocky, Alma, and Oracle Linux |
+| 🚀 **One-command deploy** | `./build.sh deploy user@host` — SSH check → upload → install, with live progress and streaming output |
+| ⚙️ **Full installer** | Dependencies, Postfix swap, hostname, Zimbra install, HTTPS redirect, Let's Encrypt SSL, relay, swap — all idempotent |
+| 📮 **ISP-relay aware** | Smarthost outbound relay (587/465) bypasses port-25 blocks; or stand up your own `emailrelay` VPS with one script |
+| ✅ **Pre-flight checks** | `./build.sh check` validates config, DNS resolution, and port-80 reachability before the long install |
+| 🔁 **Idempotent builds** | Re-runs skip the 2–6 hour zm-build when an installer for the same version + OS already exists |
+| 🩺 **Health & compliance** | Domain mail posture (MX/SPF/DKIM/DMARC/TLS/ports) with PASS/WARN/FAIL reports |
+| 🔐 **Authentik identity** | OIDC SSO foundation for the platform services (`auth.<domain>`) |
+
+## 🚀 Quick start
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/innotelinc/oasis.git
-cd oasis
+git clone https://github.com/innotelinc/mail-platform
+cd mail-platform
 
 # 2. (Optional) Configure
 cp .env.example .env   # edit with your preferences
@@ -26,7 +58,22 @@ cp .env.example .env   # edit with your preferences
 ./build.sh deploy root@mail.example.com
 ```
 
----
+Build a specific version or target OS:
+
+```bash
+./build.sh build --version 10.1.16                 # specific Zimbra version
+./build.sh build --base-image ubuntu:24.04         # Ubuntu 24.04
+./build.sh build --base-image rockylinux:9         # Rocky Linux 9 (RHEL-compatible)
+./build.sh build --no-cache                        # disable Docker cache
+./build.sh build --rebuild                         # force rebuild even if .tgz exists
+```
+
+Before installing on a real server, edit `scripts/install-config.env` (hostname, domain,
+public IP, admin passwords, relay settings) and run the diagnostics:
+
+```bash
+./build.sh check      # config, DNS, port 80, installer — exits non-zero on FAIL
+```
 
 ## Commands
 
@@ -42,53 +89,7 @@ cp .env.example .env   # edit with your preferences
 | `./build.sh test` | Test the build container |
 | `./build.sh list` | List available base OS images |
 
----
-
-## Build Options
-
-```bash
-# Build specific Zimbra version
-./build.sh build --version 10.1.16
-
-# Build for Ubuntu 24.04
-./build.sh build --base-image ubuntu:24.04
-
-# Build for Rocky Linux 9 (RHEL 9 compatible)
-./build.sh build --base-image rockylinux:9
-
-# Disable Docker cache
-./build.sh build --no-cache
-
-# Force a rebuild even if the installer .tgz already exists
-./build.sh build --rebuild
-
-# All options combined
-./build.sh build --base-image ubuntu:24.04 --version 10.1.16 --output ./my-builds
-```
-
-### Idempotent / incremental builds
-
-`build.sh` and the container entrypoint both skip the long zm-build run when an
-installer for the same **Zimbra version + target OS** already exists in
-`./builds/`:
-
-```bash
-./build.sh            # re-run: skips the 2-6 hour build, then installs
-```
-
-- The match includes the target OS (`UBUNTU22_64`, `RHEL9_64`, …), so switching
-  `--base-image` (e.g. `ubuntu:22.04` → `rockylinux:9`) triggers a fresh build
-  even for the same version.
-- Force a rebuild with `--rebuild` or `FORCE_REBUILD=true`:
-
-```bash
-./build.sh build --rebuild
-FORCE_REBUILD=true docker compose up --build
-```
-
----
-
-## Architecture
+## 🧱 Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -114,588 +115,63 @@ FORCE_REBUILD=true docker compose up --build
       Any Linux mail server target
 ```
 
----
-
-## Installing on Your Mail Server
-
-### Option A: Automated (`./build.sh deploy`)
-
-```bash
-# Single command — copies installer + script, runs everything
-./build.sh deploy root@mail.example.com
-
-# With custom config
-./build.sh deploy root@mail.example.com --config my-install.env
-
-# With an explicit installer file (or --tgz path/to/zcs-*.tgz)
-./build.sh deploy root@mail.example.com ./builds/zcs-10.1.16_GA_*.UBUNTU24_64.*.tgz
-```
-
-**Progress:** deploy runs in 4 phases with live output — `[1/4]` SSH check,
-`[2/4]` installer upload, `[3/4]` build-script upload (build.sh contains the
-installer), `[4/4]` remote install.
-Transfers show a progress bar (`pv` if installed, otherwise scp's native meter —
-`apt install pv` to get the bar), and the long install phase streams the
-server's output in real time with an animated spinner + elapsed-time line.
-
-> **Note:** edit `scripts/install-config.env` (hostname, domain, public IP, admin
-> passwords, and the relay settings from the port-25 section below) **before**
-> deploying — the installer reads it during setup.
-
-### How deploy authentication works
-
-`deploy` uses your normal SSH setup — it doesn't manage passwords itself. It
-connects as the user you give it (`root@host`), so make sure **your SSH public
-key** is installed on the server:
-
-```bash
-ssh-copy-id root@mail.example.com   # one-time; then deploys run passwordless
-```
-
-Control the connection via `.env` (or environment):
-
-```bash
-DEPLOY_SSH_KEY="~/.ssh/id_ed25519"      # specific key instead of the agent/default
-DEPLOY_SSH_PORT=2222                     # non-standard SSH port
-DEPLOY_SSH_OPTS="-o ConnectTimeout=15"  # extra ssh options
-```
-
-Details:
-- **SSH key / agent** → no password is ever asked (this is the "deploy without
-  a password" case).
-- **No key installed** → `scp`/`ssh` prompt for the password interactively.
-- **`root@host`** → the remote install already runs as root, so no sudo prompt.
-- **`user@host`** → you'll be prompted for the remote sudo password once (the
-  install phase runs `sudo bash build.sh install`).
-- If the key is rejected you'll get a connection error telling you to run
-  `ssh-copy-id` or set `DEPLOY_SSH_KEY`/`DEPLOY_SSH_PORT`/`DEPLOY_SSH_OPTS`.
-
-### Option B: Manual Install
-
-```bash
-# 1. Copy files to server
-scp ./builds/zcs-*.tgz build.sh scripts/install-config.env root@mail.example.com:/usr/src/
-
-# 2. Edit config on the server
-ssh root@mail.example.com
-cd /usr/src
-nano install-config.env   # Set passwords, domain, relay, etc.
-
-# 3. Run the installer (build.sh contains the installer)
-sudo bash build.sh install --config install-config.env zcs-*.tgz
-
-# Or skip certain sections:
-sudo bash build.sh install --skip-ssl --skip-theme --config install-config.env zcs-*.tgz
-```
-
-### Pre-install diagnostics (`./build.sh check`)
-
-Before running the install, verify the config, DNS, and port 80 — the things
-that most often make the install abort (especially the Let's Encrypt step).
-Safe to run as any user:
-
-```bash
-./build.sh check                      # uses scripts/install-config.env if present
-./build.sh check --config my.env      # or a custom config file
-```
-
-It reports PASS/WARN/FAIL per item and exits non-zero if anything FAILed:
-
-- **Configuration** — real (non-placeholder) `HOSTNAME`/`DOMAIN`/`SSL_DOMAINS`,
-  `ZIMBRA_ADMIN_PASSWORD` set, `LETSENCRYPT_EMAIL`, `PUBLIC_IP`, relay sanity.
-- **DNS** — each `SSL_DOMAINS` entry resolves to this server's public IP
-  (checked against `PUBLIC_IP` or auto-detected).
-- **Port 80** — nothing squatting on local port 80, no active ufw/firewalld
-  blocking it, and inbound TCP 80 reachability from the internet via
-  [check-host.net](https://check-host.net) (best-effort — skipped with a WARN
-  if the check service is unreachable).
-- **Installer** — a `zcs-*.tgz` exists in `./builds` (or `ZIMBRA_TGZ_PATH` set).
-
----
-
-## What the Installer Does
-
-The installer (built into `build.sh` as the `install` command) covers the complete server setup:
-
-| Section | What it does |
-|---------|-------------|
-| Dependencies | Installs GCC, Java 8, Ant, Maven, Perl, etc. |
-| Postfix | Stops and removes existing Postfix |
-| Webmin | Installs Webmin for server administration |
-| Hostname | Sets hostname and /etc/hosts |
-| IPv6/Firewall | Disables IPv6 and firewalls |
-| Zimbra Install | Extracts and runs Zimbra installer |
-| Post-config | HTTPS redirect, LMTP, Amavis, SpamAssassin |
-| SSL | Let's Encrypt certificate + deployment |
-| Relay | Smarthost outbound relay (bypasses ISP port-25 block) |
-| Theme | Zextras theme (optional) |
-| Email Relay | Emailrelay local submission proxy (optional) |
-| Swap | Creates swap file |
-
-Re-runs are idempotent: dependency installation and Let's Encrypt issuance are
-skipped when already done (marker file / existing certificate), and the Zimbra
-install is skipped if `/opt/zimbra/.install_done` exists.
-
----
-
-## Outbound Mail When Your ISP Blocks Port 25
-
-Most residential/office ISPs block **outbound TCP port 25**, which makes direct
-delivery to other mail servers impossible. There is no way around this from
-your own connection: remote mail servers only accept mail on port 25, so
-*something* off your network must do the final delivery.
-
-### How it works here
-
-1. Zimbra's Postfix relays **all** outbound mail to a smarthost on an **open**
-   port (`587` submission, `465` SMTPS, or a custom port) with STARTTLS + AUTH.
-2. The smarthost (not you) performs the final port-25 delivery to the internet.
-
-Configure it in `scripts/install-config.env`:
-
-```bash
-RELAY_ENABLED=true
-RELAY_HOST="[smtp.yourisp.net]:587"   # or [smtp.gmail.com]:587, [smtp.zoho.com]:587 ...
-RELAY_USER="you@example.com"
-RELAY_PASSWORD="your-password"
-RELAY_TLS_LEVEL="may"                # may = STARTTLS if offered, encrypt = require TLS
-```
-
-The `[...]` brackets force Postfix to use the exact host:port (no MX lookup).
-
-### Fully self-managed option: relay through your own VPS
-
-If you don't want to depend on Google/Zoho, run emailrelay on any cheap VPS
-(~$5/mo — VPS providers don't block port 25):
-
-```bash
-# 1. On the VPS (as root), install emailrelay as an authenticated relay:
-git clone https://github.com/innotelinc/oasis.git
-cd oasis/scripts && sudo bash setup-vps-relay.sh
-
-# 2. It prints RELAY_HOST / RELAY_USER / RELAY_PASSWORD — put them in install-config.env:
-RELAY_ENABLED=true
-RELAY_HOST="[vps-ip-or-host]:587"
-RELAY_USER="mailrelay"
-RELAY_PASSWORD="<printed password>"
-RELAY_TLS_LEVEL="encrypt"
-```
-
-`setup-vps-relay.sh` builds emailrelay from the innotelinc fork, listens on
-`587` (override with `--port 2525`) with **STARTTLS required + auth** (the mode
-Postfix uses natively), and delivers to the world via DNS MX. It also checks
-that the VPS itself can reach outbound port 25 (some providers block it by
-default). The emailrelay instance on the **mail server** (if enabled) is a
-separate, optional local submission proxy — it does not replace this relay.
-
-> **Delivery reputation:** for best deliverability, set a PTR/reverse-DNS record
-> on the VPS IP, an `A` record for the mail host, and proper SPF + DKIM for your
-> domain. Gmail/Google Workspace relays also require SPF/DKIM alignment.
-
-## Configuration Reference
-
-### install-config.env
-
-```bash
-# Server Identity
-HOSTNAME=mail.example.com
-DOMAIN=example.com
-PUBLIC_IP=1.2.3.4
-TIMEZONE="America/New_York"
-
-# Zimbra Admin (set passwords!)
-ZIMBRA_ADMIN_PASSWORD="YourSecurePassword123"
-ZIMBRA_LDAP_PASSWORD="YourSecurePassword123"
-
-# Let's Encrypt
-LETSENCRYPT_EMAIL=admin@example.com
-SSL_DOMAINS=("mail.example.com")
-
-# Outbound Relay (smarthost — bypasses ISP port-25 block)
-RELAY_ENABLED=true
-RELAY_HOST="[smtp.gmail.com]:587"   # or your ISP relay / own VPS
-RELAY_USER="yourname@gmail.com"
-RELAY_PASSWORD="your-app-password"
-RELAY_TLS_LEVEL="may"
-
-# Skip sections
-SKIP_SSL=false
-SKIP_THEME=true
-SKIP_RELAY=false
-SKIP_DEPS=false
-DRY_RUN=false
-
-# Idempotency — re-runs skip steps already completed
-DEPS_MARKER=/var/lib/zimbra-installer/.deps_done   # skip dep install once this exists
-```
-
----
-
-## Version Resolution
-
-When using `ZIMBRA_VERSION=latest` (default), the script:
-
-1. Reads the release tags from the official [Zimbra zm-build repository](https://github.com/Zimbra/zm-build) (`git ls-remote`)
-2. Keeps only plain `X.Y.Z` FOSS release tags (excludes betas/RCs and `X.Y.Z.pN` patches)
-3. Picks the highest version number
-4. Defaults to 10.1.16 if the repo can't be reached
-
----
-
-## Docker Compose
-
-```bash
-docker compose up --build
-```
-
-Environment variables from `.env` are automatically loaded:
-
-```bash
-ZIMBRA_VERSION=10.1.16 BASE_IMAGE=ubuntu:24.04 docker compose up --build
-FORCE_REBUILD=true docker compose up --build   # skip the already-built check
-```
-
----
-
-## Output
-
-After a successful build, the installer lands in `./builds/`:
-
-```
-./builds/
-└── zcs-10.1.16_GA_XXXXXXX.UBUNTU22_64.YYYYMMDDHHMMSS.tgz
-```
-
----
+After a successful build, the installer lands in `./builds/` as
+`zcs-<version>_GA_<hash>.<OS>_64.<timestamp>.tgz`.
 
 ## Requirements
 
 | Component | Minimum |
 |-----------|---------|
 | Docker | 20.10+ |
-| Git | Any recent |
 | Disk space | ~15 GB free |
-| RAM | 4+ GB recommended |
-| Internet | Required (clone repos, download deps) |
+| RAM | 4+ GB recommended (8+ cores / 16 GB → ~2–3 h builds) |
 
----
+Supported base images: `ubuntu:24.04`, `ubuntu:22.04`, `ubuntu:20.04`, `rockylinux:9`,
+`rockylinux:8`, `almalinux:9`, `oraclelinux:9`.
 
-## Build Time
+## 📚 Documentation
 
-| Hardware | Approximate Time |
-|----------|-----------------|
-| 8 cores, 16 GB RAM | ~2–3 hours |
-| 4 cores, 8 GB RAM | ~4–6 hours |
-| 2 cores, 4 GB RAM | ~8+ hours |
-
----
-
-## Available Target OS Images
-
-```bash
-./build.sh list
-```
-
-| Image | Description |
-|-------|-------------|
-| `ubuntu:24.04` | Ubuntu 24.04 Noble (newest LTS) |
-| `ubuntu:22.04` | Ubuntu 22.04 Jammy (most tested) |
-| `ubuntu:20.04` | Ubuntu 20.04 Focal |
-| `rockylinux:9` | Rocky Linux 9 (RHEL 9) |
-| `rockylinux:8` | Rocky Linux 8 (RHEL 8) |
-| `almalinux:9` | AlmaLinux 9 (RHEL 9) |
-| `oraclelinux:9` | Oracle Linux 9 (RHEL 9) |
-
----
-
-## Project Structure
-
-```
-.
-├── build.sh                  # One-command build + install + deploy script
-├── Dockerfile                # Multi-distro builder image
-├── docker-compose.yml        # Docker Compose for easy builds
-├── .env.example              # Environment config template
-├── LICENSE                   # MIT license
-└── scripts/
-    ├── entrypoint.sh         # Container entrypoint (detect OS, run zm-build)
-    ├── setup-oasis.sh        # Idempotent local/production stack bootstrap
-    ├── npm-proxy-hosts.py    # NPM host + wildcard certificate provisioning
-    ├── init-certificates.sh  # First-time production certificate issuance
-    ├── oasis-health.sh       # Domain health monitoring and compliance report
-    ├── migrate-mailboxes.sh  # Exchange/Google/Zimbra mailbox migration
-    ├── backup-oasis.sh       # PostgreSQL/Redis/Authentik backup
-    ├── restore-oasis.sh      # Restore from a backup archive
-    ├── upgrade-oasis.sh      # In-place stack upgrade
-    ├── uninstall-oasis.sh    # Remove systemd services (preserves data)
-    ├── smoke-oasis.sh        # Post-bootstrap smoke test
-    ├── setup-vps-relay.sh    # emailrelay outbound relay for your VPS (port 25)
-    ├── verify.sh             # Post-install verification
-    └── install-config.env    # Install configuration template (gitignored)
-```
-
----
-
-## Troubleshooting
-
-### Build fails with `DNS resolution failed — cannot resolve github.com`
-
-The builder's pre-flight DNS check (`getent hosts github.com`) fails when the
-container can't resolve DNS — even though the image itself built fine. The
-usual culprit on Ubuntu hosts is systemd-resolved: Docker copies the host's
-`/etc/resolv.conf` into the container, and that file points at the
-systemd-resolved stub (`nameserver 127.0.0.53`), which only listens on the
-*host's* loopback — so every lookup from inside the container fails.
-
-Confirm it on the host:
-
-```bash
-cat /etc/resolv.conf                        # ← look for 127.0.0.53
-cat /etc/docker/daemon.json                 # check for an existing dns override
-docker run --rm alpine nslookup github.com
-```
-
-**Built-in fallback** — `build.sh` now passes `--dns 8.8.8.8 --dns 1.1.1.1` to
-the build container by default (and `docker-compose.yml` sets the same), so this
-error shouldn't appear on systemd-resolved hosts. To use your own resolvers —
-or the Docker daemon's DNS (e.g. corporate/VPN) — set `DOCKER_DNS` in `.env`:
-
-```bash
-DOCKER_DNS=""                     # use the Docker daemon's DNS
-DOCKER_DNS="10.0.0.1 10.0.0.2"    # your own resolvers
-```
-
-**Permanent fix** — configure the Docker daemon to use a reachable resolver for
-every container. Edit `/etc/docker/daemon.json`:
-
-```json
-{
-  "dns": ["8.8.8.8", "1.1.1.1"]
-}
-```
-
-Then `sudo systemctl restart docker` and re-run the build. If you're behind a
-corporate network or VPN, use your internal resolver (e.g. `10.x.x.x`) instead
-of the public ones.
-
-### Build fails with `open3: exec of rsync ... failed: No such file or directory`
-
-The packaging stage of zm-build uses `rsync` to stage the installer files, but
-older builder images didn't include it. Pull the latest code and rebuild the
-Docker image (the image build is fast — the long part is the zm-build run):
-
-```bash
-git pull
-./build.sh build --base-image ubuntu:24.04 --version 10.1.16
-```
-
-If you still hit it, rebuild the image with `--no-cache` to bypass a stale layer:
-
-```bash
-./build.sh build --no-cache
-```
-
-> **Tip:** run `./build.sh test` first as a pre-flight — it verifies all required
-tools (including `rsync`) are present inside the container before you commit to
-the long build. The build container runs with `--rm` and only `./builds` (the
-installer output) is kept; if an installer for the same version + OS already
-exists there, the run is skipped — use `--rebuild` to force a fresh 2–6 hour run.
-
-### Build fails with "No such branch"
-
-The version tag might not exist. Check available versions:
-
-```bash
-git ls-remote --tags https://github.com/Zimbra/zm-build.git | grep -E '[0-9]+\.[0-9]+\.[0-9]+$'
-```
-
-### Install fails with `certbot failed — check DNS points to this server`
-
-The Let's Encrypt step failed. The script now shows certbot's full error output
-(saved to `/var/log/letsencrypt-request.log`) and a pre-flight DNS check, so
-re-run to see the real reason. The usual causes, in order:
-
-1. **Placeholder domain never replaced.** If the message says
-   `Requesting certificate for: mail.example.com`, your config still has the
-   template values — `example.com` is IANA-reserved and can never be issued a
-   certificate. Set the real domain in `scripts/install-config.env` (or `.env`):
-
-   ```bash
-   HOSTNAME=mail.yourdomain.com
-   DOMAIN=yourdomain.com
-   SSL_DOMAINS=("mail.yourdomain.com")
-   LETSENCRYPT_EMAIL=you@yourdomain.com
-   ```
-
-   To skip Let's Encrypt for now: `SKIP_SSL=true`.
-
-2. **DNS doesn't point at this server.** The `A` record for your domain must
-   resolve to this server's public IP, e.g.:
-
-   ```bash
-   dig +short mail.yourdomain.com     # should print your server's public IP
-   ```
-
-   Fix the record at your DNS provider and wait for propagation (can take
-   minutes to hours) before re-running.
-
-3. **Port 80 not reachable.** Certbot's standalone mode needs inbound TCP 80
-   from the internet — check NAT/port-forwarding and that no firewall is
-   blocking it.
-
-4. **Rate limit.** Let's Encrypt allows 5 duplicate certificates per week per
-   domain; repeated failed/duplicate requests hit this limit.
-
-On failure the installer now also restarts Zimbra's proxy and mailbox services
-(they're stopped to free ports 80/443 during issuance), so the server isn't
-left without them.
-
-**Fallback instead of aborting** — after a certbot failure the installer asks
-*Continue the install without SSL? [y/N]*. Answering `y` skips SSL (same as
-`--skip-ssl`) and finishes the install; `N`/Enter aborts. Runs that can't
-prompt — `deploy` over SSH, cron, CI — never hang: they abort unless you set
-`SSL_FAILURE=skip` to auto-continue without SSL.
-
-```bash
-SSL_FAILURE=skip sudo bash build.sh install --config install-config.env zcs-*.tgz
-```
-
-### Out of memory
-
-Add resource limits in `docker-compose.yml` or use `--memory` flag:
-
-```bash
-docker run --memory=8g ...
-```
-
-### Deploy fails with `mkdir: cannot create directory ... Permission denied` (or `Permission denied on ./builds/`)
-
-The `./builds` output directory is bind-mounted into the container, but it was
-created by your host user (e.g. root) while the build runs as the container's
-`build` user (UID 1000). Current images auto-fix the mount ownership at
-container start, so `git pull` and rebuild the image:
-
-```bash
-git pull
-./build.sh build
-```
-
-Manual fallbacks (either one works):
-
-```bash
-chmod 777 ./builds
-# Or set BUILD_UID/BUILD_GID in .env to match your user
-```
-
-> **Note:** the auto-fix chowns `./builds` to the container's build UID (default
-> 1000) — bind mounts share the host directory's ownership. If your host user
-> has a different UID, set `BUILD_UID`/`BUILD_GID` in `.env` to match, or use
-> `sudo` to clean old artifacts.
-
-### Docker daemon not running
-
-```bash
-sudo systemctl start docker
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
----
-
-## Host lifecycle
-
-Single-node deployments can use the systemd installer and units documented in
-[`docs/SYSTEMD.md`](docs/SYSTEMD.md). The lifecycle scripts preserve `.env` and
-backups by default and require explicit confirmation for upgrades or removal.
-
-For a local bootstrap:
-
-```bash
-OASIS_MODE=local scripts/setup-oasis.sh
-scripts/smoke-oasis.sh local
-```
-
-For production, configure DNS and ACME settings first:
-
-```bash
-OASIS_MODE=production scripts/setup-oasis.sh
-scripts/init-certificates.sh
-scripts/oasis-health.sh --report
-scripts/smoke-oasis.sh production
-```
-
-## Edge hostnames and certificates
-
-`scripts/npm-proxy-hosts.py` provisions the public Oasis hostnames in Nginx
-Proxy Manager through its API:
-
-| Hostname | Service |
+| Document | Covers |
 |---|---|
-| `app.<domain>` | Oasis web application |
-| `api.<domain>` | Oasis API |
-| `auth.<domain>` | Authentik identity provider |
-| `mail.<domain>` | Oasis webmail |
-| `files.<domain>` | Oasis file service |
-| `admin.<domain>` | Oasis administration |
+| [docs/build-and-deploy.md](docs/build-and-deploy.md) | Deploy (SSH auth, manual install), installer sections, port-25 smarthost relay, full `install-config.env` reference, troubleshooting |
+| [docs/SYSTEMD.md](docs/SYSTEMD.md) | Host lifecycle: systemd installer + units |
+| [docs/COMPLIANCE.md](docs/COMPLIANCE.md) | Health monitoring + compliance reports |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | Exchange / Google / Zimbra mailbox migration |
+| [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md) | Backup, restore, retention, DR |
+| [docs/SSO.md](docs/SSO.md) | Authentik identity integration |
 
-It is idempotent, supports `--check` for drift inspection and `--no-prune` to
-keep stale hosts. It also requests the HTTPS certificate through the same API:
-with `NPM_DNS_PROVIDER` + `NPM_DNS_CREDENTIALS` set it provisions a
-**wildcard** `*.<domain>` Let's Encrypt certificate via DNS-01 (the default);
-otherwise it requests one SAN certificate covering the hostnames via HTTP-01.
-Configured credentials (`NPM_API_URL`, `NPM_API_TOKEN` or
-`NPM_ADMIN_EMAIL`/`NPM_ADMIN_PASSWORD`, `ACME_EMAIL`) in `.env` are detected
-by `scripts/setup-oasis.sh`, which runs the sync automatically in production
-mode. See `config/nginx/README.md`.
+## Platform services
 
-## Health monitoring and compliance
+- **Edge hostnames** — `scripts/npm-proxy-hosts.py` provisions `app`, `api`, `auth`,
+  `mail`, `files`, and `admin` hosts in Nginx Proxy Manager, with a wildcard
+  `*.<domain>` Let's Encrypt cert via DNS-01 by default (`--check` for drift).
+- **Health monitoring** — `scripts/oasis-health.sh` checks mail posture with exit codes
+  for cron, `--json`, and dated Markdown compliance reports.
+- **Migration** — `scripts/migrate-mailboxes.sh` (imapsync-based) moves Exchange, Google
+  Workspace, and Zimbra mailboxes with per-provider presets.
+- **Lifecycle** — `scripts/setup-oasis.sh` (local/production), `backup-oasis.sh`,
+  `restore-oasis.sh`, `upgrade-oasis.sh`, `uninstall-oasis.sh`, `smoke-oasis.sh`.
 
-`scripts/oasis-health.sh` checks the six module hostnames plus the base
-domain's mail posture — MX, SPF, DKIM, DMARC, TLS certificate validity, and
-SMTP/IMAP port reachability — with PASS/WARN/FAIL output, exit codes for
-cron, `--json` summaries, and dated Markdown compliance reports (`--report`).
-See [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md).
+## 📦 Releases
 
-## Migration
-
-Exchange, Google Workspace, and Zimbra mailboxes can be moved onto Oasis with
-`scripts/migrate-mailboxes.sh` (imapsync-based, Docker fallback, per-provider
-presets and never exposes passwords on the command line). Calendar, contacts,
-and files are covered by the export/import paths in
-[`docs/MIGRATION.md`](docs/MIGRATION.md).
-
-## Operations
-
-Backup, restore, retention, and disaster-recovery procedures are documented in
-[`docs/BACKUP-RESTORE.md`](docs/BACKUP-RESTORE.md).
-
-## Identity and SSO
-
-Authentik is the central Oasis identity provider. Initial bootstrap and OIDC
-provider templates are documented in [`config/authentik/`](config/authentik/),
-with application integration guidance in [`docs/SSO.md`](docs/SSO.md).
-
-## Releases
-
-Oasis release tags use the `vMAJOR.MINOR.PATCH` format and are independent of
-Zimbra versions. The release workflow uses the repository-controlled default
-`RELEASE_ZIMBRA_VERSION=10.1.16` for the builder. No GitHub repository variable
-is required. Releases can be run from the Actions UI with a different valid
-Zimbra `X.Y.Z` version using the `workflow_dispatch` input.
+Release tags use `vMAJOR.MINOR.PATCH` (independent of Zimbra versions) and build with the
+repo-controlled default `RELEASE_ZIMBRA_VERSION=10.1.16` — no GitHub repository variable
+required. Pick a different Zimbra `X.Y.Z` from the Actions UI via `workflow_dispatch`.
 
 ## Project status
 
-Oasis is under active development. The current release provides reproducible
-Zimbra FOSS builds, mail-server deployment, the Authentik-backed identity
-stack with Docker Compose, NPM edge provisioning with wildcard certificates,
-domain health monitoring and compliance reporting, mailbox migration
-tooling, backup/restore, and systemd lifecycle management. Production mail,
-calendar, contacts, and file-sharing are delivered by the deployed Zimbra
-mail server behind the module hostnames; multi-tenancy, automation, and
-administration modules are planned components delivered incrementally.
+Under active development. The current release provides reproducible Zimbra FOSS builds,
+mail-server deployment, the Authentik-backed identity stack, NPM edge provisioning with
+wildcard certificates, domain health monitoring and compliance reporting, mailbox
+migration tooling, backup/restore, and systemd lifecycle management. Multi-tenancy,
+automation, and administration modules are planned and delivered incrementally.
 
 ## Licensing
 
-Oasis is released under the [MIT License](LICENSE). Upstream Zimbra, imapsync,
-emailrelay, Docker base images, and other dependencies retain their own
-licenses; consult their notices before redistribution.
+Oasis is released under the [MIT License](LICENSE). Upstream Zimbra, imapsync, emailrelay,
+Docker base images, and other dependencies retain their own licenses; consult their notices
+before redistribution.
+
+---
+
+*Oasis — enterprise mail, self-hosted from source.*
