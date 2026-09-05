@@ -30,6 +30,7 @@ provides, and explicitly does not own.
 - Infisical — secrets, SMTP credentials, relay credentials
 - Cerulean — certificates and trust
 - Magnate — subscriptions and entitlements
+- NPM Edge — public routing, TLS termination at the edge
 
 ## Explicitly does NOT own
 
