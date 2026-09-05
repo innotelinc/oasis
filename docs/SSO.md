@@ -29,6 +29,16 @@ OIDC_SCOPES=openid profile email groups oasis_tenant
 OIDC_REDIRECT_URI=https://service.oasis.innotel.us/auth/callback
 ```
 
+## Cerulean (shared identity plane)
+
+`auth.oasis.innotel.us` fronts the shared Cerulean Authentik, where the Oasis client
+catalog from `config/authentik/providers.yaml.example` is registered: `oasis-app`
+(public, PKCE), `oasis-admin`, `oasis-files`, `oasis-mail`, and `oasis-api`. Issuer URLs
+are provider-scoped (for example
+`https://auth.oasis.innotel.us/application/o/oasis-app/`), client secrets live in
+`config/authentik/.env` (gitignored), and every provider carries the default
+`openid profile email` + `groups` scope mappings.
+
 Public browser clients must use PKCE and must not contain a client secret.
 Confidential clients must keep the secret in a secret manager or an ignored
 runtime environment file.
