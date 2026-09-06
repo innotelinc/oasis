@@ -161,7 +161,7 @@ required. Pick a different Zimbra `X.Y.Z` from the Actions UI via `workflow_disp
 ## Project status
 
 Under active development. The current release provides reproducible Zimbra FOSS builds,
-mail-server deployment, the Authentik-backed identity stack, NPM edge provisioning with
+mail-server deployment, the Cerulean Authentik-backed identity stack, NPM edge provisioning with
 wildcard certificates, domain health monitoring and compliance reporting, mailbox
 migration tooling, backup/restore, and systemd lifecycle management. Multi-tenancy,
 automation, and administration modules are planned and delivered incrementally.
@@ -180,7 +180,7 @@ before redistribution.
 
 Oasis is the ecosystem's **MailOps** platform — email, calendars, contacts, and collaboration in the
 [**Innotel Platform Stack**](https://github.com/innotelinc/innotel-platform-stack) — the
-canonical single-responsibility architecture where Authentik owns identity, Infisical owns
+canonical single-responsibility architecture where Cerulean Authentik owns identity, Infisical owns
 secrets, Cerulean owns trust, ONYX owns storage, Magnate owns revenue, NPM Edge owns the edge, and every other
 platform is a business function that consumes them. See
 [docs/stack.md](docs/stack.md) for this platform's owns/consumes boundaries and its

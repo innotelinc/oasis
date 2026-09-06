@@ -8,16 +8,6 @@
 #   docker compose --profile builder up --build
 
 x-authentik-environment: &authentik-environment
-  AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?Set AUTHENTIK_SECRET_KEY in .env}
-  AUTHENTIK_POSTGRESQL__HOST: postgres
-  AUTHENTIK_POSTGRESQL__PORT: 5432
-  AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-authentik}
-  AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER:-authentik}
-  AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-  AUTHENTIK_REDIS__HOST: redis
-  AUTHENTIK_REDIS__PORT: 6379
-  AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
-  AUTHENTIK_ERROR_REPORTING__ENABLED: ${AUTHENTIK_ERROR_REPORTING_ENABLED:-false}
 
 services:
   postgres:
@@ -54,40 +44,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
     networks: [oasis-backend]
 
-  authentik-server:
-    image: ghcr.io/goauthentik/server:2024.12.3
-    container_name: oasis-authentik-server
-    restart: unless-stopped
-    command: server
-    environment: *authentik-environment
-    volumes:
-      - authentik-media:/media
-      - authentik-templates:/templates
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:9000/-/health/ready/\")'"]
-      interval: 15s
-      start_period: 30s
-      timeout: 5s
-      retries: 10
-    networks: [oasis-backend, oasis-proxy]
 
-  authentik-worker:
-    image: ghcr.io/goauthentik/server:2024.12.3
-    container_name: oasis-authentik-worker
-    restart: unless-stopped
-    command: worker
-    environment: *authentik-environment
-    volumes:
-      - authentik-media:/media
-      - authentik-templates:/templates
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    networks: [oasis-backend]
 
   reverse-proxy-local:
     profiles: [local]
@@ -99,7 +56,6 @@ services:
     volumes:
       - ./config/nginx/oasis-local.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      authentik-server: { condition: service_healthy }
     networks: [oasis-proxy]
 
   reverse-proxy:
@@ -115,7 +71,6 @@ services:
       - certbot-webroot:/var/www/certbot:ro
       - certbot-etc:/etc/letsencrypt:ro
     depends_on:
-      authentik-server: { condition: service_healthy }
     networks: [oasis-proxy]
 
   certbot:
@@ -158,8 +113,6 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  authentik-media:
-  authentik-templates:
   certbot-webroot:
   certbot-etc:
 
