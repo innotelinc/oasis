@@ -33,9 +33,9 @@ ${COMPOSE} stop authentik-server authentik-worker
 printf 'Restoring PostgreSQL...\n'
 ${COMPOSE} exec -T postgres dropdb --if-exists -U "${POSTGRES_USER:-authentik}" "${POSTGRES_DB:-authentik}"
 ${COMPOSE} exec -T postgres createdb -U "${POSTGRES_USER:-authentik}" "${POSTGRES_DB:-authentik}"
-cat "${ROOT}/postgres.dump" | ${COMPOSE} exec -T postgres pg_restore \
+${COMPOSE} exec -T postgres pg_restore \
   --clean --if-exists --no-owner --no-privileges \
-  -U "${POSTGRES_USER:-authentik}" -d "${POSTGRES_DB:-authentik}"
+  -U "${POSTGRES_USER:-authentik}" -d "${POSTGRES_DB:-authentik}" < "${ROOT}/postgres.dump"
 
 printf 'Restoring Redis...\n'
 ${COMPOSE} stop redis

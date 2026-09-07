@@ -20,9 +20,11 @@ info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 # ── Detect OS ──────────────────────────────────────────────
 detect_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         OS_ID="${ID}"
         OS_VERSION="${VERSION_ID}"
+        # shellcheck disable=SC2034 # captured for diagnostics / sourced tooling
         OS_CODENAME="${VERSION_CODENAME:-}"
         OS_NAME="${PRETTY_NAME:-${ID} ${VERSION_ID}}"
     elif [ -f /etc/redhat-release ]; then
@@ -205,7 +207,8 @@ do_build() {
     
     # Create build directory — fix ownership in case Docker volume
     # mount created parent dirs as root-owned
-    local uid_gid="$(id -u):$(id -g)"
+    local uid_gid
+    uid_gid="$(id -u):$(id -g)"
     sudo mkdir -p "${BUILD_DIR}"
     sudo chown "${uid_gid}" "${BUILD_DIR}"
     # The BUILDS dir is a bind mount from the host (./builds), whose

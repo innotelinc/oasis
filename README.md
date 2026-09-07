@@ -56,7 +56,7 @@ and observability land incrementally on top.
 
 ```bash
 # 1. Clone the repo
-git clone https://innotelinc.github.io/oasis
+git clone https://github.com/innotelinc/oasis.git
 cd oasis
 
 # 2. (Optional) Configure
