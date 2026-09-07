@@ -129,7 +129,7 @@ jobs:
           output-file: oasis-zimbra-builder-v${{ steps.version.outputs.version }}.spdx.json
 
       - name: Scan image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}
           format: table
