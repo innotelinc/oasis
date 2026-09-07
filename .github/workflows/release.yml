@@ -11,9 +11,9 @@ on:
         default: ''
         type: string
       zimbra_version:
-        description: 'Upstream Zimbra X.Y.Z version to build'
+        description: 'Upstream Zimbra X.Y.Z version to build (default: latest upstream release)'
         required: true
-        default: '10.1.16'
+        default: 'latest'
         type: string
 
 permissions:
@@ -25,10 +25,10 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/oasis/zimbra-builder
-  # Oasis release tags are independent of the upstream Zimbra release. Keep the
-  # default in version control so releases work without repository settings.
-  # Override deliberately with workflow_dispatch inputs.
-  RELEASE_ZIMBRA_VERSION: '10.1.16'
+  # Oasis release tags are independent of the upstream Zimbra release.
+  # Resolved at release time: defaults to the newest upstream Zimbra FOSS
+  # release tag (see the Resolve step) unless overridden with workflow_dispatch.
+  RELEASE_ZIMBRA_VERSION: 'latest'
 
 jobs:
   validate:
@@ -94,13 +94,24 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Validate Zimbra builder version
+      - name: Resolve Zimbra builder version
+        # Defaults to the newest X.Y.Z FOSS tag in the official zm-build repo so
+        # every release builds the latest possible upstream; an explicit X.Y.Z
+        # via workflow_dispatch pins the build. Falls back to 10.1.21 only if
+        # the upstream repo is unreachable.
         run: |
-          zimbra_version="${{ inputs.zimbra_version || env.RELEASE_ZIMBRA_VERSION }}"
+          requested="${{ inputs.zimbra_version || env.RELEASE_ZIMBRA_VERSION }}"
+          if [ "${requested}" = "latest" ]; then
+            zimbra_version="$(GIT_TERMINAL_PROMPT=0 git ls-remote --tags --refs https://github.com/Zimbra/zm-build.git 2>/dev/null | sed -n 's#.*refs/tags/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)"
+            zimbra_version="${zimbra_version:-10.1.21}"
+          else
+            zimbra_version="${requested}"
+          fi
           if ! [[ "$zimbra_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Zimbra version must be X.Y.Z, got: $zimbra_version" >&2
+            echo "Zimbra version must be X.Y.Z or 'latest', got: $zimbra_version" >&2
             exit 1
           fi
+          echo "Resolved Zimbra FOSS version: ${zimbra_version}"
           echo "RELEASE_ZIMBRA_VERSION=$zimbra_version" >> "$GITHUB_ENV"
 
       - name: Build and push builder image
@@ -113,7 +124,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BASE_IMAGE=ubuntu:22.04
-            ZIMBRA_VERSION=${{ inputs.zimbra_version || env.RELEASE_ZIMBRA_VERSION }}
+            ZIMBRA_VERSION=$RELEASE_ZIMBRA_VERSION
             BUILD_UID=1000
             BUILD_GID=1000
           cache-from: type=gha

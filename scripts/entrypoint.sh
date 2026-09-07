@@ -69,8 +69,8 @@ resolve_version() {
         version=$(fetch_released_versions | head -1 || true)
         
         if [ -z "${version}" ]; then
-            err "Could not determine latest version from ${ZIMBRA_REPO}. Falling back to 10.1.16"
-            ZIMBRA_VERSION="10.1.16"
+            err "Could not determine latest version from ${ZIMBRA_REPO}. Falling back to 10.1.21"
+            ZIMBRA_VERSION="10.1.21"
         else
             ZIMBRA_VERSION="${version}"
         fi

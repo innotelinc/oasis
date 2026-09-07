@@ -73,7 +73,7 @@ cp .env.example .env   # edit with your preferences
 Build a specific version or target OS:
 
 ```bash
-./build.sh build --version 10.1.16                 # specific Zimbra version
+./build.sh build --version 10.1.21                 # specific Zimbra version
 ./build.sh build --base-image ubuntu:24.04         # Ubuntu 24.04
 ./build.sh build --base-image rockylinux:9         # Rocky Linux 9 (RHEL-compatible)
 ./build.sh build --no-cache                        # disable Docker cache
@@ -166,9 +166,9 @@ Supported base images: `ubuntu:24.04`, `ubuntu:22.04`, `ubuntu:20.04`, `rockylin
 
 ## 📦 Releases
 
-Release tags use `vMAJOR.MINOR.PATCH` (independent of Zimbra versions) and build with the
-repo-controlled default `RELEASE_ZIMBRA_VERSION=10.1.16` — no GitHub repository variable
-required. Pick a different Zimbra `X.Y.Z` from the Actions UI via `workflow_dispatch`.
+Release tags use `vMAJOR.MINOR.PATCH` (independent of Zimbra versions). Each release resolves
+and builds the **newest upstream Zimbra FOSS release** at release time (no GitHub repository
+variable required); pin a specific Zimbra `X.Y.Z` from the Actions UI via `workflow_dispatch`.
 
 ## Project status
 
