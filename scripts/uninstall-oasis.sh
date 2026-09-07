@@ -18,9 +18,11 @@ systemctl daemon-reload
 
 if [ -d "$INSTALL_ROOT" ]; then
   if [ "${PURGE_DATA:-no}" = yes ]; then
+    # shellcheck disable=SC2015 # best-effort teardown; missing install root is fine
     (cd "$INSTALL_ROOT" && docker compose down --volumes --remove-orphans 2>/dev/null || true)
     rm -rf "$INSTALL_ROOT"
   else
+    # shellcheck disable=SC2015 # best-effort teardown; missing install root is fine
     (cd "$INSTALL_ROOT" && docker compose down --remove-orphans 2>/dev/null || true)
     echo "Preserved $INSTALL_ROOT, including .env and backups."
   fi

@@ -155,7 +155,8 @@ fi
 # ── 7. Firewall ────────────────────────────────────────────
 echo "[+] Opening port ${VPS_RELAY_PORT}/tcp..."
 dry ufw allow "${VPS_RELAY_PORT}/tcp" 2>/dev/null || true
-dry firewall-cmd --permanent --add-port="${VPS_RELAY_PORT}/tcp" 2>/dev/null && dry firewall-cmd --reload 2>/dev/null || true
+dry firewall-cmd --permanent --add-port="${VPS_RELAY_PORT}/tcp" 2>/dev/null || true
+      dry firewall-cmd --reload 2>/dev/null || true
 
 # ── 8. Port-25 check (many VPS providers block outbound 25 by default) ──
 echo "[+] Checking outbound port 25 from this VPS..."

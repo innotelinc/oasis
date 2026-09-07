@@ -99,7 +99,10 @@ CONFIG_FILE="${CONFIG_FILE:-}"
 
 # Load .env if present
 if [ -f .env ]; then
-    set -a; source .env; set +a
+    set -a
+    # shellcheck source=/dev/null
+    source .env
+    set +a
     info "Loaded configuration from .env"
 fi
 
@@ -119,6 +122,7 @@ banner() {
 # Detect OS for nice default
 detect_host_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         info "Host OS: ${PRETTY_NAME:-${ID} ${VERSION_ID}}"
     fi
@@ -230,7 +234,7 @@ choose_version() {
     echo "  Available FOSS releases:"
     echo ""
     for i in "${!versions[@]}"; do
-        if [ $i -eq 0 ]; then
+        if [ "$i" -eq 0 ]; then
             printf "  ${GREEN}%2d)${NC} %s ${BOLD}← latest${NC}\n" $((i+1)) "${versions[$i]}"
         else
             printf "  ${BLUE}%2d)${NC} %s\n" $((i+1)) "${versions[$i]}"
@@ -268,7 +272,7 @@ choose_base_image() {
     echo "  Available target OS images:"
     echo ""
     for i in "${!images[@]}"; do
-        if [ $i -eq 0 ]; then
+        if [ "$i" -eq 0 ]; then
             printf "  ${GREEN}%2d)${NC} %s ${BOLD}← default${NC}\n" $((i+1)) "${images[$i]}"
         else
             printf "  ${BLUE}%2d)${NC} %s\n" $((i+1)) "${images[$i]}"
@@ -334,6 +338,9 @@ build_image() {
     local cache_flag=""
     ${NO_CACHE} && cache_flag="--no-cache"
     
+    # DOCKER_BUILD_OPTS and cache_flag are space-separated flag lists that are
+    # intentionally word-split into separate docker arguments.
+    # shellcheck disable=SC2086
     docker build ${DOCKER_BUILD_OPTS} ${cache_flag} \
         --build-arg BASE_IMAGE="${BASE_IMAGE}" \
         --build-arg ZIMBRA_VERSION="${ZIMBRA_VERSION}" \
@@ -411,6 +418,9 @@ run_build() {
     log "   Press Ctrl+C to cancel (build state will be lost)"
     echo ""
     
+    # DOCKER_RUN_OPTS is a space-separated flag list and docker_dns_args()
+    # prints one --dns <ip> pair per line — both intentionally word-split.
+    # shellcheck disable=SC2086,SC2046
     docker run ${DOCKER_RUN_OPTS} \
         --rm \
         $(docker_dns_args) \
@@ -516,6 +526,7 @@ transfer_file() {
     size=$(stat -c%s "${src}" 2>/dev/null || stat -f%z "${src}" 2>/dev/null || printf '0')
     log "  ⇪ $(basename "${src}")  ($(hr_size "${size}")) → ${target}:${dest}"
     if command -v pv >/dev/null 2>&1 && [ "${size}" -gt 0 ]; then
+        # shellcheck disable=SC2029  # ${dest} is intentionally a client-side path
         pv -pterb -s "${size}" "${src}" | ssh "${ssh_args[@]}" "${target}" "cat > '${dest}'"
     else
         # scp uses -P for the port (ssh uses -p) — translate
@@ -700,9 +711,12 @@ do_deploy() {
 #  INSTALL SECTION  (runs on the mail server, as root)
 # ═══════════════════════════════════════════════════════════
 
-# Detect OS family (sets OS_ID, OS_FAMILY, PKG_MGR)
+# Detect OS family (sets OS_ID, OS_FAMILY, PKG_MGR). OS_VERSION_ID and
+# OS_CODENAME are kept for diagnostics / sourced tooling.
+# shellcheck disable=SC2034
 detect_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         OS_ID="${ID}"
         OS_VERSION_ID="${VERSION_ID}"
@@ -757,7 +771,10 @@ load_config() {
     local cfg="${1:-}"
     if [ -n "${cfg}" ] && [ -f "${cfg}" ]; then
         log "Loading config: ${cfg}"
-        set -a; source "${cfg}"; set +a
+        set -a
+        # shellcheck disable=SC1090  # ${cfg} is a runtime-supplied config path
+        source "${cfg}"
+        set +a
     fi
 }
 
@@ -853,7 +870,7 @@ configure_hosts() {
     if ! grep -q "${HOSTNAME}" /etc/hosts 2>/dev/null; then
         local entry="127.0.0.1 localhost.localdomain localhost\n::1 localhost.localdomain localhost ip6-localhost ip6-loopback"
         if [ -n "${PUBLIC_IP}" ]; then
-            entry="${entry}\n${PUBLIC_IP} ${HOSTNAME} $(echo ${HOSTNAME} | cut -d. -f1)"
+            entry="${entry}\n${PUBLIC_IP} ${HOSTNAME} $(echo "${HOSTNAME}" | cut -d. -f1)"
         fi
         dry bash -c "echo -e '${entry}' > /etc/hosts"
     fi
@@ -1052,6 +1069,7 @@ configure_amavis() {
     local amavis_conf="/opt/zimbra/conf/amavisd.conf.in"
     if [ -f "${amavis_conf}" ]; then
         if ! grep -q '10024,10026' "${amavis_conf}" 2>/dev/null; then
+            # shellcheck disable=SC2016  # the \$ escapes must stay literal for sed
             dry sed -i 's/\$inet_socket_port = \[10024\];/\$inet_socket_port = [10024,10026];/' "${amavis_conf}"
         fi
         if ! grep -q "${HOSTNAME}" "${amavis_conf}" 2>/dev/null; then
@@ -1200,6 +1218,7 @@ setup_letsencrypt() {
     # a failure shows certbot's real reason (DNS, port 80, rate limit, ...).
     local certbot_log="/var/log/letsencrypt-request.log"
     log "Requesting certificate for: ${SSL_DOMAINS[*]}"
+    # shellcheck disable=SC2086  # domain_args is a space-separated flag list
     if ! dry certbot certonly --agree-tos -m "${LETSENCRYPT_EMAIL}" \
             --key-type rsa --preferred-chain "ISRG Root X1" \
             --standalone ${domain_args} -n > "${certbot_log}" 2>&1; then
