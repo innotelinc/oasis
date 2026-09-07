@@ -208,8 +208,8 @@ resolve_version() {
         version=$(fetch_released_versions | head -1 || true)
         
         if [ -z "${version}" ]; then
-            warn "Could not determine latest version from ${ZIMBRA_REPO}, falling back to 10.1.16"
-            ZIMBRA_VERSION="10.1.16"
+            warn "Could not determine latest version from ${ZIMBRA_REPO}, falling back to 10.1.21"
+            ZIMBRA_VERSION="10.1.21"
         else
             ZIMBRA_VERSION="${version}"
         fi
@@ -226,8 +226,8 @@ choose_version() {
     mapfile -t versions < <(fetch_released_versions)
     
     if [ ${#versions[@]} -eq 0 ]; then
-        warn "Could not fetch versions from the official Zimbra repo (${ZIMBRA_REPO}), using 10.1.16"
-        ZIMBRA_VERSION="10.1.16"
+        warn "Could not fetch versions from the official Zimbra repo (${ZIMBRA_REPO}), using 10.1.21"
+        ZIMBRA_VERSION="10.1.21"
         return
     fi
     
@@ -1765,7 +1765,7 @@ show_help() {
     echo "  ./build.sh install ./builds/zcs-*.tgz         # Install a specific build"
     echo "  ./build.sh check [--config my.env]           # Pre-install diagnostics (safe as any user)"
     echo "  ./build.sh install --config my.env            # Install with custom config"
-    echo "  ./build.sh build --version 10.1.16            # Build specific version"
+    echo "  ./build.sh build --version 10.1.21            # Build specific version"
     echo "  ./build.sh build --base-image rockylinux:9    # Build for Rocky Linux 9"
     echo "  ./build.sh deploy root@mail.example.com       # Deploy to remote server"
     echo "  ./build.sh deploy user@host --config my.env   # Deploy with custom config"
@@ -1791,7 +1791,7 @@ show_install_help() {
     echo "  --force            Re-install even if Zimbra is already installed"
     echo ""
     echo "Examples:"
-    echo "  $0 install zcs-10.1.16_GA_*.tgz"
+    echo "  $0 install zcs-10.1.21_GA_*.tgz"
     echo "  $0 install --config install-config.env zcs-*.tgz"
     echo "  $0 install --url https://example.com/zcs-*.tgz --dry-run"
 }

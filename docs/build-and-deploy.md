@@ -12,7 +12,7 @@
 ./build.sh deploy root@mail.example.com --config my-install.env
 
 ## With an explicit installer file (or --tgz path/to/zcs-*.tgz)
-./build.sh deploy root@mail.example.com ./builds/zcs-10.1.16_GA_*.UBUNTU24_64.*.tgz
+./build.sh deploy root@mail.example.com ./builds/zcs-10.1.21_GA_*.UBUNTU24_64.*.tgz
 ```
 
 **Progress:** deploy runs in 4 phases with live output — `[1/4]` SSH check,
@@ -222,7 +222,7 @@ When using `ZIMBRA_VERSION=latest` (default), the script:
 1. Reads the release tags from the official [Zimbra zm-build repository](https://github.com/Zimbra/zm-build) (`git ls-remote`)
 2. Keeps only plain `X.Y.Z` FOSS release tags (excludes betas/RCs and `X.Y.Z.pN` patches)
 3. Picks the highest version number
-4. Defaults to 10.1.16 if the repo can't be reached
+4. Defaults to 10.1.21 if the repo can't be reached
 
 
 ### Docker Compose
@@ -234,7 +234,7 @@ docker compose up --build
 Environment variables from `.env` are automatically loaded:
 
 ```bash
-ZIMBRA_VERSION=10.1.16 BASE_IMAGE=ubuntu:24.04 docker compose up --build
+ZIMBRA_VERSION=10.1.21 BASE_IMAGE=ubuntu:24.04 docker compose up --build
 FORCE_REBUILD=true docker compose up --build   # skip the already-built check
 ```
 
@@ -246,7 +246,7 @@ After a successful build, the installer lands in `./builds/`:
 
 ```
 ./builds/
-└── zcs-10.1.16_GA_XXXXXXX.UBUNTU22_64.YYYYMMDDHHMMSS.tgz
+└── zcs-10.1.21_GA_XXXXXXX.UBUNTU22_64.YYYYMMDDHHMMSS.tgz
 ```
 
 
@@ -300,7 +300,7 @@ Docker image (the image build is fast — the long part is the zm-build run):
 
 ```bash
 git pull
-./build.sh build --base-image ubuntu:24.04 --version 10.1.16
+./build.sh build --base-image ubuntu:24.04 --version 10.1.21
 ```
 
 If you still hit it, rebuild the image with `--no-cache` to bypass a stale layer:
