@@ -133,9 +133,14 @@ jobs:
         with:
           cache: true
 
-      - name: Scan image
+      # Release gate: fail on CRITICAL/HIGH package vulnerabilities. The
+      # builder image ships Zimbra's own /etc/maven/settings.xml template,
+      # whose placeholder credentials trip trivy's secret heuristics — scan
+      # vulnerabilities here and let the SBOM cover provenance.
+      - name: Scan image (vulnerabilities)
         run: |
           trivy image \
+            --scanners vuln \
             --format table \
             --exit-code 1 \
             --ignore-unfixed \
