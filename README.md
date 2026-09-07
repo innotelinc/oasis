@@ -12,6 +12,7 @@ built in. Email transport, identity, calendar, contacts, files, automation, admi
 and observability land incrementally on top.
 
 [![CI](https://github.com/innotelinc/oasis/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/ci.yml)
+[![Conformity](https://github.com/innotelinc/oasis/actions/workflows/conform.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/conform.yml)
 [![Release](https://github.com/innotelinc/oasis/actions/workflows/release.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
