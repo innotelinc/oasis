@@ -5,6 +5,11 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Release version to cut (default: bump minor from the last release)'
+        required: false
+        default: ''
+        type: string
       zimbra_version:
         description: 'Upstream Zimbra X.Y.Z version to build'
         required: true
@@ -22,8 +27,7 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/oasis/zimbra-builder
   # Oasis release tags are independent of the upstream Zimbra release. Keep the
   # default in version control so releases work without repository settings.
-  # Override deliberately with workflow_dispatch inputs if that trigger is
-  # added later; never derive this from github.ref_name.
+  # Override deliberately with workflow_dispatch inputs.
   RELEASE_ZIMBRA_VERSION: '10.1.16'
 
 jobs:
@@ -48,13 +52,36 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            LAST="$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)"
+            LAST="${LAST#v}"
+            if [ -z "$LAST" ]; then
+              VERSION="0.1.0"
+            else
+              MAJOR="${LAST%%.*}"; REST="${LAST#*.}"; MINOR="${REST%%.*}"
+              VERSION="${MAJOR}.$((MINOR + 1)).0"
+            fi
+          fi
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad release version: $VERSION" >&2; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release: v$VERSION"
+
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=tag
+            type=raw,value=v${{ steps.version.outputs.version }}
             type=sha
 
       - name: Login to GHCR
@@ -95,15 +122,16 @@ jobs:
       - name: Generate image SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-          registry: ${{ env.REGISTRY }}
-          artifact-name: oasis-zimbra-builder-${{ github.ref_name }}.spdx.json
-          output-file: oasis-zimbra-builder-${{ github.ref_name }}.spdx.json
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          artifact-name: oasis-zimbra-builder-v${{ steps.version.outputs.version }}.spdx.json
+          output-file: oasis-zimbra-builder-v${{ steps.version.outputs.version }}.spdx.json
 
       - name: Scan image
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -111,14 +139,14 @@ jobs:
 
       - name: Record release build configuration
         run: |
-          printf 'Oasis release: %s\nZimbra builder version: %s\n' \
-            "$GITHUB_REF_NAME" "$RELEASE_ZIMBRA_VERSION" > release-build-info.txt
+          printf 'Oasis release: v%s\nZimbra builder version: %s\n' \
+            "${{ steps.version.outputs.version }}" "$RELEASE_ZIMBRA_VERSION" > release-build-info.txt
 
       - name: Package Compose bundle
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist/oasis-${version}
-          cp -a docker-compose.yml .env.example README.md config docs scripts systemd Dockerfile build.sh dist/oasis-${version}/
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p "dist/oasis-${version}"
+          cp -a docker-compose.yml .env.example README.md config docs scripts systemd Dockerfile build.sh "dist/oasis-${version}/"
           tar -C dist -czf "oasis-${version}-compose.tar.gz" "oasis-${version}"
           sha256sum "oasis-${version}-compose.tar.gz" > "oasis-${version}-compose.tar.gz.sha256"
 
@@ -132,6 +160,7 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: |
             oasis-*-compose.tar.gz
