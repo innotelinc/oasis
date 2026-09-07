@@ -128,14 +128,19 @@ jobs:
           artifact-name: oasis-zimbra-builder-v${{ steps.version.outputs.version }}.spdx.json
           output-file: oasis-zimbra-builder-v${{ steps.version.outputs.version }}.spdx.json
 
-      - name: Scan image
-        uses: aquasecurity/trivy-action@v0.28.0
+      - name: Install trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: CRITICAL,HIGH
+          cache: true
+
+      - name: Scan image
+        run: |
+          trivy image \
+            --format table \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity CRITICAL,HIGH \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.version.outputs.version }}"
 
       - name: Record release build configuration
         run: |
