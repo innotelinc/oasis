@@ -11,6 +11,10 @@ x-authentik-environment: &authentik-environment
 
 services:
   postgres:
+    # Memory posture (docs/service-audit.md): mail state store; cap shared
+    # buffers indirectly via the container limit.
+    mem_limit: 1g
+    memswap_limit: 1g
     image: postgres:16.4-alpine
     container_name: oasis-postgres
     restart: unless-stopped
