@@ -14,12 +14,20 @@ Oasis hostnames through the same API:
 Use --check for a read-only drift check and --no-prune to avoid deleting old
 Oasis-managed hosts. Certs are matched by their exact domain set and reused,
 never reissued, when they already exist. NPM handles renewal itself.
+
+The upstream forward host follows the stack-wide convention (central
+``stack-lib.sh`` in innotel-platform-stack): an explicit ``NPM_UPSTREAM_HOST``
+wins, otherwise the host's LAN IP is auto-detected — ``host.docker.internal``
+is only a last-resort fallback because container/loopback addresses are not
+resolvable from a remote NPM edge.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import socket
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -38,6 +46,32 @@ HOSTS = [
 ]
 
 DEFAULT_NPM_API_URL = "http://127.0.0.1:81"
+
+
+def detect_lan_ip() -> str:
+    """This host's primary LAN IPv4 (the address a remote NPM can reach).
+
+    Mirrors the central stack-lib.sh convention: prefer the default-route
+    source address; never a loopback address.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))  # picks the default route, sends nothing
+        ip = sock.getsockname()[0]
+        if ip and not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    try:
+        out = subprocess.check_output(["hostname", "-I"], text=True, stderr=subprocess.DEVNULL)
+        for ip in out.split():
+            if ip and not ip.startswith("127."):
+                return ip.split("%")[0]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
 
 
 class NpmError(RuntimeError):
@@ -261,7 +295,9 @@ def main() -> int:
 
     env = load_env()
     base_domain = derive_base_domain(env)
-    upstream = setting(env, "NPM_UPSTREAM_HOST", "host.docker.internal")
+    # Upstream follows the stack convention: explicit wins, else the LAN IP
+    # (auto-detected), else the docker-internal alias as a last resort.
+    upstream = setting(env, "NPM_UPSTREAM_HOST") or detect_lan_ip() or "host.docker.internal"
     api_url = setting(env, "NPM_API_URL", DEFAULT_NPM_API_URL)
     token = setting(env, "NPM_API_TOKEN")
     email = setting(env, "NPM_ADMIN_EMAIL")
