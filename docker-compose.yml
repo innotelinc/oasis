@@ -7,6 +7,10 @@
 # The Zimbra source builder is opt-in:
 #   docker compose --profile builder up --build
 
+# Project name is pinned so container/volume names never depend on where this
+# repo is checked out (the mesh puts it in 5-dev/oasis).
+name: oasis
+
 x-authentik-environment: &authentik-environment
 
 services:

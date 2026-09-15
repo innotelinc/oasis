@@ -28,7 +28,7 @@ and observability land incrementally on top.
 | --- | --- |
 | Zimbra FOSS builds are painful to reproduce | One command, any Linux mail server; builds Zimbra FOSS from source |
 | Mail identity sprawl across systems | Cerulean Authentik-first where applicable; disable a user and mail access dies |
-| Secrets committed to .env or repos | Infisical is the only secrets store; .env is derived and gitignored |
+| Secrets committed to .env or repos | Cerulean Vault is the only secrets store; .env carries derived references and is gitignored |
 | Mail stack is hard to rebuild from source | Oasis captures the full build toolchain and deployment payload per release |
 
 > **About Oasis** — a self-hosted, open-source enterprise communication platform. Build a
@@ -192,7 +192,7 @@ before redistribution.
 
 Oasis is the ecosystem's **MailOps** platform — email, calendars, contacts, and collaboration in the
 [**Innotel Platform Stack**](https://github.com/innotelinc/innotel-platform-stack) — the
-canonical single-responsibility architecture where Cerulean Authentik owns identity, Infisical owns
+canonical single-responsibility architecture where Cerulean Authentik owns identity, Cerulean Vault owns
 secrets, Cerulean owns trust, ONYX owns storage, Magnate owns revenue, NPM Edge owns the edge, and every other
 platform is a 
 ---
@@ -203,4 +203,4 @@ Oasis is licensed under the MIT License. See [LICENSE](LICENSE) for the full tex
 
 business function that consumes them. See
 [docs/stack.md](docs/stack.md) for this platform's owns/consumes boundaries and its
-Infisical secret setup.
+Cerulean Vault secret setup.
