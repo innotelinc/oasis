@@ -12,6 +12,11 @@ __pycache__/
 .env
 install-config.env
 
+# Cerulean Vault token copies (data/vault/token/<product>.token) — live credentials.
+data/vault/token/
+data/vault/init/
+data/vault/file/
+
 # OS junk
 .DS_Store
 Thumbs.db
