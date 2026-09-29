@@ -15,6 +15,7 @@ and observability land incrementally on top.
 [![Conformity](https://github.com/innotelinc/oasis/actions/workflows/conform.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/conform.yml)
 [![Release](https://github.com/innotelinc/oasis/actions/workflows/release.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Theme: Unity](https://img.shields.io/badge/theme-Unity-6366f1)](https://github.com/innotelinc/innotel-platform-stack/blob/main/standards/unity/README.md)
 
 *Mail that is yours — from source to inbox.*
 
