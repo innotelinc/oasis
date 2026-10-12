@@ -15,6 +15,7 @@ These scripts make Stalwart a pure consumer of that trust:
 | `stalwart_install_cert.py` | Fetches the `*.innotel.us` wildcard (chain + key) from Cerulean, writes it to `/etc/stalwart/tls/`, and registers it as the default `Certificate`. Idempotent: a matching expiry + SAN set is a no‑op so the timer is cheap. |
 | `cerulean_publish_zone.py` | Publishes Stalwart's generated zone through the bridge. Records are classed `exact` / `add` / `singleton` / `override` so a run never duplicates a singleton (SPF, DMARC, MX, CAA `issue`, CNAME) and never writes over an estate‑owned value. |
 | `cerulean-renew.sh` | Runs the installer then the publisher for every domain; the systemd timer calls this. |
+| `verify_trust.py` | One read-only verdict on the whole posture (Manual domains, no TSIG/ACME route, cert matches Cerulean, zones conflict-free) for CI/drift-check; exit 2 when it cannot judge. |
 | `systemd/oasis-cerulean-renew.{service,timer}` | Daily renewal, `Persistent=true` so a missed run catches up. |
 
 ## Domesticated records

@@ -179,6 +179,12 @@ wildcard certificates, domain health monitoring and compliance reporting, mailbo
 migration tooling, backup/restore, and systemd lifecycle management. Multi-tenancy,
 automation, and administration modules are planned and delivered incrementally.
 
+**Direction:** Oasis is moving off Zimbra's Java stack to a lightweight engine — **Stalwart**
+for mail with **Bulwark** webmail, on Cerulean trust and Authentik identity — absorbing the best
+of what Forward Email's open-source service does without carrying its multi-service runtime. See
+[docs/roadmap.md](docs/roadmap.md) for the comparison, the decision, and the phases, including the
+mailbox-domain vs sending-domain stance (Signara's `signara.innotel.us` is a sending domain).
+
 ## Licensing
 
 Oasis is released under the [MIT License](LICENSE). Upstream Zimbra, imapsync, emailrelay,
