@@ -47,12 +47,26 @@ environment; sessions are HMAC-signed cookies with a CSRF token on every write.
 | `GET /auth/login`, `GET /auth/callback` | the OIDC flow |
 | `GET /auth/logout` | clear the session |
 | `GET /api/state` | JSON: domains and users |
-| `POST /api/domains` | `{action: add\|remove, name, description?}` |
+| `POST /api/domains` | `{action: add\|remove\|publish, name, description?}` |
 | `POST /api/users` | `{action: add\|remove, email, name?, groups?}` |
 | `POST /api/users/password` | `{email}` — rotate the Authentik password (returned once) |
 
 Adding a user generates a password and returns it once; adding a domain returns
 the follow-up steps that Stalwart does not do (NS, MX).
+
+### DNS
+
+Adding a domain, or the **Publish DNS** action, writes the domain's generated
+DKIM/SPF/DMARC (and SRV/MTA-STS/TLS-RPT/autoconfig) records to the estate
+resolver **through Cerulean** — Stalwart's own publisher is deliberately off, and
+Cerulean is the only principal allowed to touch the resolver.
+
+Nothing is written into a zone the resolver does not already serve. The service
+checks that the records the resolver returns actually belong to the zone before
+writing anything; a brand-new domain therefore reports *"the resolver does not
+serve this zone — create the zone and its NS delegation first"* instead of
+minting a private zone that DNS never delegates to. Create the zone in Cerulean,
+delegate it at the registrar, then publish.
 
 ## Deploy
 

@@ -47,6 +47,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -516,6 +517,79 @@ def remove_user(email: str) -> dict:
     return result
 
 
+def publish_dns(name: str) -> dict:
+    """Write this domain's generated DKIM/SPF/DMARC (and friends) through Cerulean.
+
+    Stalwart renders the zone but its own publisher is switched off — Cerulean is
+    the only principal allowed to write the estate's resolver. Nothing is written
+    into a zone the resolver does not already serve: a brand-new domain reports
+    that its zone must be created first rather than inventing records for a name
+    that does not resolve.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cerulean_publish_zone as cz  # noqa: E402
+    from cerulean import Cerulean, CeruleanError  # noqa: E402
+
+    _, sw, _ = services()
+    name = name.strip().lower()
+    dom = sw.domain(name)
+    if not dom:
+        raise RuntimeError(f"{name}: no such domain")
+    text = dom.get("dnsZoneFile") or ""
+    if not text.strip():
+        raise RuntimeError(f"{name}: Stalwart has not rendered a zone for this domain")
+
+    client = Cerulean()
+    try:
+        live_rows = client.records(name)
+    except CeruleanError:
+        live_rows = []
+
+    def belongs(record_name) -> bool:
+        n = str(record_name or "").lower().rstrip(".")
+        return n == name or n.endswith("." + name)
+
+    # The bridge ignores the ?zone= filter on read and answers with the zone it
+    # does serve, so an unserved domain looks like it has records. Only publish
+    # when every record that came back really is inside this zone; otherwise the
+    # zone does not exist yet and writing here would mint a private zone that DNS
+    # never delegates to (and that nothing will ever clean up).
+    if not live_rows or not any(belongs(r.get("name")) for r in live_rows):
+        return {"domain": name, "skipped": "the resolver does not serve this zone — "
+                "create the zone and its NS delegation first, then publish"}
+    live_rows = [r for r in live_rows if belongs(r.get("name"))]
+
+    live: dict[tuple[str, str], set[str]] = {}
+    for r in live_rows:
+        key = (str(r.get("name", "")).lower().rstrip("."), str(r.get("type", "")).upper())
+        live.setdefault(key, set()).add(re.sub(r"\s+", " ", str(r.get("value", ""))).strip())
+
+    added, exact = [], 0
+    override = conflict = failed = 0
+    for rec in cz.parse_zone(text, name):
+        key = (rec["name"], rec["type"])
+        present = live.get(key, set())
+        if rec["value"] in present:
+            exact += 1
+            continue
+        kind = cz.classify(rec)
+        if kind == "override":          # estate-owned: apex SPF/DMARC/MX and CAA issue
+            override += 1
+            continue
+        if kind == "singleton" and present:
+            conflict += 1
+            continue
+        try:
+            client.add_record(name, rec["type"], rec["name"], rec["value"], ttl=3600)
+            live.setdefault(key, set()).add(rec["value"])
+            added.append({"type": rec["type"], "name": rec["name"], "value": rec["value"][:90]})
+        except CeruleanError as exc:
+            failed += 1
+            added.append({"type": rec["type"], "name": rec["name"], "failed": str(exc)[:120]})
+    return {"domain": name, "added": len(added), "exact": exact, "override": override,
+            "conflict": conflict, "failed": failed, "records": added[:25]}
+
+
 def add_domain(name: str, description: str | None) -> dict:
     _, sw, _ = services()
     name = name.strip().lower()
@@ -525,11 +599,17 @@ def add_domain(name: str, description: str | None) -> dict:
         raise RuntimeError(f"{name} already exists in Stalwart")
     made = sw.create_domain(name, description)
     after = sw.domain(name)
-    return {"domain": name, "id": made.get("id"),
-            "enabled": bool(after and after.get("isEnabled")),
-            "next": [f"point {name}'s NS at the estate resolver (and MX at {MX_HOST} "
-                     "if it receives mail)",
-                     "Stalwart publishes DKIM/SPF/DMARC itself once the zone exists"]}
+    result = {"domain": name, "id": made.get("id"),
+              "enabled": bool(after and after.get("isEnabled")),
+              "next": [f"point {name}'s NS at the estate resolver (and MX at {MX_HOST} "
+                       "if it receives mail)",
+                       "DKIM/SPF/DMARC are published to the resolver by Cerulean once "
+                       "the zone is served (use Publish DNS)"]}
+    try:
+        result["dns"] = publish_dns(name)
+    except Exception as exc:  # noqa: BLE001 - the domain is created either way
+        result["dns"] = {"error": str(exc)[:200]}
+    return result
 
 
 def remove_domain(name: str) -> dict:
@@ -634,8 +714,13 @@ async function load(){
     b.textContent='Remove';b.onclick=async()=>{if(!confirm('Remove '+x.name+'?'))return;
       try{await api('/api/domains',{action:'remove',name:x.name},'POST');
       toast('removed '+x.name,'ok');load()}catch(e){toast(e.message,'bad')}};
+    const pub=document.createElement('button');pub.className='ghost';pub.textContent='Publish DNS';
+    pub.style.marginRight='6px';pub.onclick=async()=>{try{const r=await api('/api/domains',
+      {action:'publish',name:x.name},'POST');
+      toast(JSON.stringify(r),'ok');load()}catch(e){toast(e.message,'bad')}};
+    const acts=document.createElement('span');acts.appendChild(pub);acts.appendChild(b);
     d.appendChild(row([x.name,'<span class="pill">'+(x.enabled?'enabled':'disabled')+'</span>',
-      x.description||'',b]))});
+      x.description||'',acts]))});
   const u=document.getElementById('users');u.innerHTML='';
   s.users.forEach(x=>{const b=document.createElement('button');b.className='bad';
     b.textContent='Remove';b.onclick=async()=>{if(!confirm('Remove '+x.email+'?'))return;
@@ -832,7 +917,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, add_domain(name, body.get("description")))
         if action == "remove":
             return self.json(200, remove_domain(name))
-        self.json(400, {"error": "action must be add or remove"})
+        if action == "publish":
+            return self.json(200, publish_dns(name))
+        self.json(400, {"error": "action must be add, remove or publish"})
 
     def api_users(self, body: dict):
         action = (body.get("action") or "").lower()
