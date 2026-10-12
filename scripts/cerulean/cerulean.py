@@ -10,6 +10,9 @@ they hold a path-scoped Cerulean **service key** and call:
     POST /api/service/certificates                 request issuance  {domain, wildcard, name}
     GET  /api/service/certificates/:id             status
     GET  /api/service/certificates/:id/material    fullchain PEM + private key
+    GET  /api/service/domains                      list registered zones (own tenant)
+    POST /api/service/domains                      create  {name} — registers the domain
+                                                   and mints its authoritative Technitium zone
     GET  /api/service/dns/records?zone=ZONE        list a zone
     POST /api/service/dns/records                  add   {zone, type, name, value, ttl, priority}
     DELETE /api/service/dns/records                remove{zone, type, name, value}
@@ -138,6 +141,28 @@ class Cerulean:
     def material(self, cert_id: int) -> dict:
         return self.call(f"/service/certificates/{cert_id}/material")[1] or {}
 
+    # ── DNS zones ───────────────────────────────────────────────────────────
+    def domains(self) -> list[dict]:
+        """Every zone registered to this key's tenant."""
+        return self.call("/service/domains")[1] or []
+
+    def ensure_zone(self, domain: str) -> dict:
+        """Register `domain` with Cerulean, which mints its authoritative zone.
+
+        Idempotent: an already-registered domain (HTTP 409) is reported as
+        `created: False` rather than raised, so callers can "make sure this zone
+        exists" without having to know whether it did beforehand.
+        """
+        domain = domain.strip().lower().rstrip(".")
+        try:
+            status, body = self.call("/service/domains", "POST", {"name": domain})
+            return {"domain": domain, "created": True, "id": (body or {}).get("id"),
+                    "strategy": (body or {}).get("strategy")}
+        except CeruleanError as exc:
+            if "HTTP 409" in str(exc):
+                return {"domain": domain, "created": False, "detail": "already registered"}
+            raise
+
     # ── DNS records ─────────────────────────────────────────────────────────
     def records(self, zone: str) -> list[dict]:
         return self.call("/service/dns/records", query={"zone": zone})[1] or []
@@ -160,8 +185,10 @@ class Cerulean:
 if __name__ == "__main__":  # tiny self-probe: python3 cerulean.py
     c = Cerulean()
     certs = c.certificates()
+    zones = c.domains()
     wild = c.find_wildcard("innotel.us")
     print(f"base           : {c.base}")
+    print(f"zones          : {len(zones)} ({', '.join(sorted(z.get('name', '') for z in zones))})")
     print(f"certificates   : {len(certs)}")
     print(f"*.innotel.us   : id={wild['id']} status={wild.get('status')} "
           f"hasMaterial={wild.get('hasMaterial')} expires={wild.get('expiresAt')}"

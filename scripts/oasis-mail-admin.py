@@ -517,6 +517,32 @@ def remove_user(email: str) -> dict:
     return result
 
 
+def create_zone(name: str) -> dict:
+    """Register this mail domain with Cerulean, which mints its authoritative zone.
+
+    Cerulean (TrustOps) owns the estate resolver: it runs Technitium and is the
+    only principal allowed to create zones and write records into it. Stalwart's
+    own DNS publisher is switched off, so a new mail domain must have its zone
+    created here first — otherwise there is nothing for DKIM/SPF/DMARC to be
+    published into, and the name never resolves. Idempotent: a domain Cerulean
+    already serves comes back with ``created: False`` rather than an error.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from cerulean import Cerulean, CeruleanError  # noqa: E402
+
+    name = name.strip().lower().rstrip(".")
+    if not name or "." not in name:
+        raise RuntimeError("that is not a domain name")
+    try:
+        result = Cerulean().ensure_zone(name)
+    except CeruleanError as exc:
+        raise RuntimeError(f"Cerulean could not create the zone: {exc}")
+    result["resolver"] = "Cerulean (Technitium)"
+    result["next"] = (f"point {name}'s NS at the estate resolver so the zone is "
+                      "delegated publicly")
+    return result
+
+
 def publish_dns(name: str) -> dict:
     """Write this domain's generated DKIM/SPF/DMARC (and friends) through Cerulean.
 
@@ -556,7 +582,7 @@ def publish_dns(name: str) -> dict:
     # never delegates to (and that nothing will ever clean up).
     if not live_rows or not any(belongs(r.get("name")) for r in live_rows):
         return {"domain": name, "skipped": "the resolver does not serve this zone — "
-                "create the zone and its NS delegation first, then publish"}
+                "create the zone first (Cerulean mints it), then publish"}
     live_rows = [r for r in live_rows if belongs(r.get("name"))]
 
     live: dict[tuple[str, str], set[str]] = {}
@@ -602,9 +628,14 @@ def add_domain(name: str, description: str | None) -> dict:
     result = {"domain": name, "id": made.get("id"),
               "enabled": bool(after and after.get("isEnabled")),
               "next": [f"point {name}'s NS at the estate resolver (and MX at {MX_HOST} "
-                       "if it receives mail)",
-                       "DKIM/SPF/DMARC are published to the resolver by Cerulean once "
-                       "the zone is served (use Publish DNS)"]}
+                       "if it receives mail)"]}
+    # Mint the authoritative zone through Cerulean before publishing: Cerulean
+    # owns the resolver, and DKIM/SPF/DMARC have nowhere to go until the zone
+    # exists. Both steps are idempotent, so re-running add is safe.
+    try:
+        result["zone"] = create_zone(name)
+    except Exception as exc:  # noqa: BLE001 - the domain is created either way
+        result["zone"] = {"error": str(exc)[:200]}
     try:
         result["dns"] = publish_dns(name)
     except Exception as exc:  # noqa: BLE001 - the domain is created either way
@@ -676,8 +707,9 @@ code{background:#0e1426;padding:2px 6px;border-radius:6px}
 <input type="text" name="name" placeholder="example.com" required>
 <input type="text" name="description" placeholder="optional description">
 <button type="submit">Add domain</button></form>
-<div class="small">Adding a domain here creates it in Stalwart with automatic DKIM,
-automatic DNS publishing and an automatic certificate. NS delegation and MX stay
+<div class="small">Adding a domain here creates it in Stalwart (with automatic DKIM
+and a certificate) and mints its authoritative zone through <b>Cerulean</b>, which
+then publishes the DKIM/SPF/DMARC records. NS delegation at the registrar stays
 manual.</div></section>
 <section><h2>Users</h2>
 <table><thead><tr><th>Email</th><th>Groups</th><th>Mailbox</th><th>Active</th><th></th></tr></thead>
@@ -714,11 +746,16 @@ async function load(){
     b.textContent='Remove';b.onclick=async()=>{if(!confirm('Remove '+x.name+'?'))return;
       try{await api('/api/domains',{action:'remove',name:x.name},'POST');
       toast('removed '+x.name,'ok');load()}catch(e){toast(e.message,'bad')}};
+    const zone=document.createElement('button');zone.className='ghost';zone.textContent='Create zone';
+    zone.style.marginRight='6px';zone.onclick=async()=>{try{const r=await api('/api/domains',
+      {action:'zone',name:x.name},'POST');
+      toast('Zone '+r.domain+' '+(r.created?'created':'already present')+' via '+r.resolver+
+        '. '+r.next,'ok');load()}catch(e){toast(e.message,'bad')}};
     const pub=document.createElement('button');pub.className='ghost';pub.textContent='Publish DNS';
     pub.style.marginRight='6px';pub.onclick=async()=>{try{const r=await api('/api/domains',
       {action:'publish',name:x.name},'POST');
       toast(JSON.stringify(r),'ok');load()}catch(e){toast(e.message,'bad')}};
-    const acts=document.createElement('span');acts.appendChild(pub);acts.appendChild(b);
+    const acts=document.createElement('span');acts.appendChild(zone);acts.appendChild(pub);acts.appendChild(b);
     d.appendChild(row([x.name,'<span class="pill">'+(x.enabled?'enabled':'disabled')+'</span>',
       x.description||'',acts]))});
   const u=document.getElementById('users');u.innerHTML='';
@@ -917,9 +954,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, add_domain(name, body.get("description")))
         if action == "remove":
             return self.json(200, remove_domain(name))
+        if action == "zone":
+            return self.json(200, create_zone(name))
         if action == "publish":
             return self.json(200, publish_dns(name))
-        self.json(400, {"error": "action must be add, remove or publish"})
+        self.json(400, {"error": "action must be add, remove, zone or publish"})
 
     def api_users(self, body: dict):
         action = (body.get("action") or "").lower()

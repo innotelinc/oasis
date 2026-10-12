@@ -20,11 +20,13 @@ Stalwart-side fix that keeps the estate's single identity store; the account mus
 be created in Authentik, and the mailbox created here as a side effect. That is
 exactly what this page does.
 
-Domains are a single Stalwart record. Adding one copies the way `innotel.us` is
-already configured — automatic DKIM, automatic DNS publishing against the estate
-resolver, and an automatic certificate — so a new domain is one click, not a
-recipe. NS delegation at the registrar and the MX record stay manual (the
-publisher never writes MX) and the page says so.
+A mail domain lives in two planes too: a **Stalwart** record (DKIM keys,
+automatic certificate) and an authoritative **DNS zone** that **Cerulean** owns
+and mints. Adding a domain does both — it creates the Stalwart domain and then
+has Cerulean create the zone (and publishes the generated DKIM/SPF/DMARC into
+it), so a new domain is one click, not a recipe. NS delegation at the registrar
+and the MX record stay manual (the publisher never writes MX) and the page says
+so.
 
 ## Sign-in
 
@@ -47,26 +49,33 @@ environment; sessions are HMAC-signed cookies with a CSRF token on every write.
 | `GET /auth/login`, `GET /auth/callback` | the OIDC flow |
 | `GET /auth/logout` | clear the session |
 | `GET /api/state` | JSON: domains and users |
-| `POST /api/domains` | `{action: add\|remove\|publish, name, description?}` |
+| `POST /api/domains` | `{action: add\|remove\|zone\|publish, name, description?}` |
 | `POST /api/users` | `{action: add\|remove, email, name?, groups?}` |
 | `POST /api/users/password` | `{email}` — rotate the Authentik password (returned once) |
 
 Adding a user generates a password and returns it once; adding a domain returns
-the follow-up steps that Stalwart does not do (NS, MX).
+the follow-up steps the service does not do (NS, MX).
 
-### DNS
+### Zones and DNS
 
-Adding a domain, or the **Publish DNS** action, writes the domain's generated
-DKIM/SPF/DMARC (and SRV/MTA-STS/TLS-RPT/autoconfig) records to the estate
-resolver **through Cerulean** — Stalwart's own publisher is deliberately off, and
-Cerulean is the only principal allowed to touch the resolver.
+Cerulean (TrustOps) owns the estate resolver: it runs Technitium and is the only
+principal allowed to create zones and write records into it. Stalwart's own
+publisher is deliberately off. So:
 
-Nothing is written into a zone the resolver does not already serve. The service
-checks that the records the resolver returns actually belong to the zone before
-writing anything; a brand-new domain therefore reports *"the resolver does not
-serve this zone — create the zone and its NS delegation first"* instead of
-minting a private zone that DNS never delegates to. Create the zone in Cerulean,
-delegate it at the registrar, then publish.
+- Adding a domain mints its authoritative zone **through Cerulean**
+  (`POST /api/service/domains`, authenticated with the Cerulean service key in
+  the vault) before publishing anything into it.
+- The **Create zone** action does the same for a domain that was added earlier
+  (or whose zone was never created). It is idempotent — a zone Cerulean already
+  serves comes back as *already present* rather than an error.
+- **Publish DNS** then writes the domain's generated DKIM/SPF/DMARC (and
+  SRV/MTA-STS/TLS-RPT/autoconfig) records into that zone through Cerulean.
+
+Publish is still guarded: if the resolver does not serve the zone, nothing is
+written — the service checks that the records the resolver returns actually
+belong to the zone before writing, so it never mints a private zone DNS would not
+delegate to. With zone creation wired in, that branch is only reached when
+Cerulean itself could not create the zone.
 
 ## Deploy
 
@@ -74,6 +83,9 @@ delegate it at the registrar, then publish.
 
    ```bash
    install -m 0644 scripts/oasis-mail-admin.py /opt/oasis/scripts/oasis-mail-admin.py
+   # the page imports these beside it (Cerulean bridge client + zone parser)
+   install -m 0644 scripts/cerulean/cerulean.py \
+     scripts/cerulean/cerulean_publish_zone.py /opt/oasis/scripts/
    install -m 0644 systemd/oasis-mail-admin.service /etc/systemd/system/
    install -d -m 0750 /etc/oasis
    install -m 0640 scripts/oasis-mail-admin.env.example /etc/oasis/oasis-mail-admin.env

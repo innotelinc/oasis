@@ -2,15 +2,15 @@
 
 Cerulean is the estate's **TrustOps** platform and the only principal allowed to use
 Technitium DNS. It owns the mail wildcard's Let's Encrypt issuance (DNS‑01 written
-straight into Technitium) and exposes both the certificate material and the DNS
-records over its service bridge. Oasis holds a **path-scoped** `ceru_…` service key
-and never talks to Technitium or to an ACME CA itself.
+straight into Technitium) and exposes the certificate material, the DNS records,
+and zone creation over its service bridge. Oasis holds a **path-scoped** `ceru_…`
+service key and never talks to Technitium or to an ACME CA itself.
 
 These scripts make Stalwart a pure consumer of that trust:
 
 | Script | Role |
 | --- | --- |
-| `cerulean.py` | Service-bridge client (`Bearer ceru_…`). Resolves the key from `CERULEAN_SERVICE_KEY`, `/etc/oasis/cerulean-service.key`, or **Cerulean Vault** (`cerulean/oasis#cerulean_service_key`) via `VAULT_TOKEN_FILE`. |
+| `cerulean.py` | Service-bridge client (`Bearer ceru_…`). Resolves the key from `CERULEAN_SERVICE_KEY`, `/etc/oasis/cerulean-service.key`, or **Cerulean Vault** (`cerulean/oasis#cerulean_service_key`) via `VAULT_TOKEN_FILE`. Covers certificates, DNS records, and `ensure_zone()` → `POST /service/domains`, which has Cerulean mint a name's authoritative zone (idempotent). |
 | `stalwart_cerulean_only.py` | Flips every Stalwart domain to `dnsManagement: Manual` + `certificateManagement: Manual` and removes the direct Technitium `DnsServer` and the unused `AcmeProvider`, so Stalwart stops writing DNS/ACME and Cerulean is the sole Technitium writer. |
 | `stalwart_install_cert.py` | Fetches the `*.innotel.us` wildcard (chain + key) from Cerulean, writes it to `/etc/stalwart/tls/`, and registers it as the default `Certificate`. Idempotent: a matching expiry + SAN set is a no‑op so the timer is cheap. |
 | `cerulean_publish_zone.py` | Publishes Stalwart's generated zone through the bridge. Records are classed `exact` / `add` / `singleton` / `override` so a run never duplicates a singleton (SPF, DMARC, MX, CAA `issue`, CNAME) and never writes over an estate‑owned value. |
@@ -30,6 +30,16 @@ A few records are the *estate's*, not the template's, and the publisher reports 
   would lock issuance to a single ACME account.
 
 TLSA is skipped: Stalwart emits it, but the bridge has no TLSA record shape.
+
+## Zones
+
+A zone has to exist before records can be published into it. `cerulean.py`'s
+`ensure_zone(name)` calls the bridge's `POST /service/domains`, which registers the
+name with Cerulean and mints its authoritative Technitium zone. The mail admin page
+uses it when a domain is added (and as a standalone **Create zone** action), so a new
+mail domain gets its zone from Cerulean rather than being created out of band. The
+branch is idempotent: a name Cerulean already serves returns `created: False`.
+Delegating the zone at the registrar (NS) remains a manual step.
 
 ## Install
 
