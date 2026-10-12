@@ -22,11 +22,14 @@ exactly what this page does.
 
 A mail domain lives in two planes too: a **Stalwart** record (DKIM keys,
 automatic certificate) and an authoritative **DNS zone** that **Cerulean** owns
-and mints. Adding a domain does both — it creates the Stalwart domain and then
-has Cerulean create the zone (and publishes the generated DKIM/SPF/DMARC into
-it), so a new domain is one click, not a recipe. NS delegation at the registrar
-and the MX record stay manual (the publisher never writes MX) and the page says
-so.
+and mints. Adding a domain does both — it creates the Stalwart domain, has
+Cerulean mint the zone, delegates the name, and publishes the generated
+DKIM/SPF/DMARC into it — so a new domain is one click, not a recipe. Removing a
+domain takes all of it back: the mailbox domain, the zone, its records, and the
+delegation. Only two things stay outside the service, because they are not DNS
+writes at all: the **MX record** (the publisher never writes MX, since mail
+routing is the operator's choice) and, for a brand-new apex, the **registrar**
+step that points the domain at the estate nameservers.
 
 ## Sign-in
 
@@ -54,7 +57,9 @@ environment; sessions are HMAC-signed cookies with a CSRF token on every write.
 | `POST /api/users/password` | `{email}` — rotate the Authentik password (returned once) |
 
 Adding a user generates a password and returns it once; adding a domain returns
-the follow-up steps the service does not do (NS, MX).
+what it did (zone, delegation, records) and the few follow-ups that are not DNS
+writes here (MX, and the registrar step for a new apex). `remove` also deletes the
+name's Cerulean zone and its delegation, not just the Stalwart record.
 
 ### Zones and DNS
 
@@ -70,6 +75,24 @@ publisher is deliberately off. So:
   serves comes back as *already present* rather than an error.
 - **Publish DNS** then writes the domain's generated DKIM/SPF/DMARC (and
   SRV/MTA-STS/TLS-RPT/autoconfig) records into that zone through Cerulean.
+- Removing a domain unregisters the zone again (`DELETE /api/service/domains`),
+  which drops the zone and every record in it, and removes the delegation the
+  page had written into the parent. Cerulean refuses its own platform zones, and
+  `PROTECTED_ZONES` (default `innotel.us`) refuses them here too.
+
+### Delegation
+
+Delegation is Cerulean's call, so the page does it rather than telling you to:
+
+- A name **inside a domain the estate already serves** (e.g. `signara.innotel.us`
+  inside `innotel.us`) is delegated automatically — the child's NS records are
+  written into the parent zone, pointing at the parent's own nameservers. Remove
+  takes them out again. This is the common case and needs nothing from you.
+- A name at the **apex of a domain nobody has delegated yet** needs its
+  **registrar** pointed at the estate nameservers (`PUBLIC_NS`, default
+  `ns1.innotel.us,ns2.innotel.us`). No registrar API exists in this estate, so
+  the page reports the exact servers to use instead of pretending it did it —
+  registering and delegating a domain is the one act that is not a DNS write.
 
 Publish is still guarded: if the resolver does not serve the zone, nothing is
 written — the service checks that the records the resolver returns actually

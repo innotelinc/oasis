@@ -81,6 +81,15 @@ VAULT_TOKEN_FILE = Path(os.environ.get("VAULT_TOKEN_FILE", "/etc/oasis/vault-tok
 VAULT_ADDR = os.environ.get("VAULT_ADDR", "http://192.168.1.71:8200")
 VAULT_KV = "cerulean/data/oasis"
 MX_HOST = os.environ.get("MX_HOST", "mail.innotel.us")
+# The estate's public nameservers — what an apex domain's registrar has to point
+# at. Only used when the domain is *not* inside a zone the resolver already
+# serves (a child is delegated into its parent automatically).
+PUBLIC_NS = [h.strip() for h in os.environ.get("PUBLIC_NS", "ns1.innotel.us,ns2.innotel.us").split(",")
+             if h.strip()]
+# Zones the page must never remove, whatever else it is asked to do.
+PROTECTED_ZONES = {z.strip().lower()
+                   for z in os.environ.get("PROTECTED_ZONES", "innotel.us").split(",")
+                   if z.strip()}
 SERVICE = "oasis-mail-admin"
 USING = ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"]
 DEFAULT_MAIL_GROUP = "Mail"
@@ -517,6 +526,65 @@ def remove_user(email: str) -> dict:
     return result
 
 
+def delegate_zone(name: str) -> dict:
+    """Make `name` resolve, delegating it through Cerulean wherever Cerulean can.
+
+    Cerulean owns the estate resolver, so delegation is its call, not the
+    operator's:
+
+    * A name inside a zone Cerulean already serves is delegated into that parent
+      automatically — the child's NS records are written into the parent zone, so
+      the name is delegated by the resolver itself rather than by hand. This is
+      the common case: `signara.innotel.us` sits inside `innotel.us`.
+    * A name at the apex of a domain nobody has delegated yet still needs its
+      registrar pointed at the estate nameservers. No registrar API exists in
+      this estate, so that one step is reported with the exact servers to use —
+      it is a registration act, not something the mail service can perform.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from cerulean import Cerulean, CeruleanError  # noqa: E402
+
+    name = name.strip().lower().rstrip(".")
+    client = Cerulean()
+    served = sorted((str(d.get("name") or "").lower() for d in client.domains() if d.get("name")),
+                    key=len, reverse=True)
+    parent = next((z for z in served if z != name and name.endswith("." + z)), None)
+    if not parent:
+        return {"mode": "registrar", "nameservers": PUBLIC_NS,
+                "action": (f"point {name}'s NS at {' and '.join(PUBLIC_NS)} at the "
+                           "registrar — no registrar API exists here, so this is the "
+                           "one step the mail service cannot do")}
+
+    def in_parent(record: dict) -> bool:
+        n = str(record.get("name") or "").lower().rstrip(".")
+        return n == parent or n.endswith("." + parent)
+
+    # The bridge ignores a zone it does not serve on read, so keep only rows that
+    # really are the parent's before trusting any of them.
+    parent_rows = [r for r in client.records(parent) if in_parent(r)]
+    targets = [str(r.get("value") or "").lower().rstrip(".")
+               for r in parent_rows
+               if str(r.get("type") or "").upper() == "NS"
+               and str(r.get("name") or "").lower().rstrip(".") == parent]
+    targets = [t for t in dict.fromkeys(targets) if t] or list(PUBLIC_NS)
+    have = {str(r.get("value") or "").lower().rstrip(".")
+            for r in parent_rows
+            if str(r.get("type") or "").upper() == "NS"
+            and str(r.get("name") or "").lower().rstrip(".") == name}
+    added = []
+    for target in targets:
+        if target in have:
+            continue
+        try:
+            client.add_record(parent, "NS", name, target, ttl=3600)
+            added.append(target)
+        except CeruleanError as exc:
+            return {"mode": "estate", "parent": parent, "nameservers": targets,
+                    "error": str(exc)[:200]}
+    return {"mode": "estate", "parent": parent, "nameservers": targets, "added": len(added),
+            "detail": f"delegated inside {parent} ({' '.join(targets)})"}
+
+
 def create_zone(name: str) -> dict:
     """Register this mail domain with Cerulean, which mints its authoritative zone.
 
@@ -538,8 +606,10 @@ def create_zone(name: str) -> dict:
     except CeruleanError as exc:
         raise RuntimeError(f"Cerulean could not create the zone: {exc}")
     result["resolver"] = "Cerulean (Technitium)"
-    result["next"] = (f"point {name}'s NS at the estate resolver so the zone is "
-                      "delegated publicly")
+    try:
+        result["delegation"] = delegate_zone(name)
+    except Exception as exc:  # noqa: BLE001 - the zone exists either way
+        result["delegation"] = {"error": str(exc)[:200]}
     return result
 
 
@@ -627,8 +697,7 @@ def add_domain(name: str, description: str | None) -> dict:
     after = sw.domain(name)
     result = {"domain": name, "id": made.get("id"),
               "enabled": bool(after and after.get("isEnabled")),
-              "next": [f"point {name}'s NS at the estate resolver (and MX at {MX_HOST} "
-                       "if it receives mail)"]}
+              "next": [f"MX at {MX_HOST} if this domain receives mail"]}
     # Mint the authoritative zone through Cerulean before publishing: Cerulean
     # owns the resolver, and DKIM/SPF/DMARC have nowhere to go until the zone
     # exists. Both steps are idempotent, so re-running add is safe.
@@ -643,14 +712,58 @@ def add_domain(name: str, description: str | None) -> dict:
     return result
 
 
+def delete_zone(name: str) -> dict:
+    """Unregister this domain with Cerulean, which removes its authoritative zone.
+
+    The counterpart of creating the zone: leaving it behind keeps the name
+    answering (and its DKIM/SPF/DMARC live) after the domain it was for is gone,
+    which nothing would ever clean up. Idempotent — a zone Cerulean does not
+    serve reports ``deleted: False`` rather than failing. Cerulean refuses its
+    own platform zones outright.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from cerulean import Cerulean, CeruleanError  # noqa: E402
+
+    name = name.strip().lower().rstrip(".")
+    if not name or "." not in name:
+        raise RuntimeError("that is not a domain name")
+    client = Cerulean()
+    try:
+        result = client.delete_zone(name)
+    except CeruleanError as exc:
+        raise RuntimeError(f"Cerulean could not remove the zone: {exc}")
+    result["resolver"] = "Cerulean (Technitium)"
+    # A child zone was delegated into its parent by `delegate_zone`; removing the
+    # zone has to take that delegation with it, or the parent keeps pointing at a
+    # name that no longer answers.
+    served = sorted((str(d.get("name") or "").lower() for d in client.domains() if d.get("name")),
+                    key=len, reverse=True)
+    parent = next((z for z in served if z != name and name.endswith("." + z)), None)
+    if parent:
+        try:
+            rows = [r for r in client.records(parent)
+                    if str(r.get("name") or "").lower().rstrip(".") == name
+                    and str(r.get("type") or "").upper() == "NS"]
+            for row in rows:
+                client.delete_record(parent, "NS", name, str(row.get("value") or ""))
+            result["delegation"] = {"parent": parent, "removed": len(rows)}
+        except CeruleanError as exc:
+            result["delegation"] = {"parent": parent, "error": str(exc)[:200]}
+    return result
+
+
 def remove_domain(name: str) -> dict:
     _, sw, _ = services()
     name = name.strip().lower()
-    for protected in ("innotel.us",):
-        if name == protected:
-            raise RuntimeError(f"refusing to remove {protected}")
+    if name in PROTECTED_ZONES:
+        raise RuntimeError(f"refusing to remove {name}")
     sw.destroy_domain(name)
-    return {"domain": name, "destroyed": True}
+    result: dict = {"domain": name, "destroyed": True}
+    try:
+        result["zone"] = delete_zone(name)
+    except Exception as exc:  # noqa: BLE001 - the domain is gone either way
+        result["zone"] = {"error": str(exc)[:200]}
+    return result
 
 
 def rotate_password(email: str) -> dict:
@@ -708,9 +821,11 @@ code{background:#0e1426;padding:2px 6px;border-radius:6px}
 <input type="text" name="description" placeholder="optional description">
 <button type="submit">Add domain</button></form>
 <div class="small">Adding a domain here creates it in Stalwart (with automatic DKIM
-and a certificate) and mints its authoritative zone through <b>Cerulean</b>, which
-then publishes the DKIM/SPF/DMARC records. NS delegation at the registrar stays
-manual.</div></section>
+and a certificate), mints its authoritative zone through <b>Cerulean</b>, delegates
+it, and publishes the DKIM/SPF/DMARC records. A name inside a domain the estate
+already serves is delegated automatically; a brand-new apex needs its registrar
+pointed at the estate nameservers, which no API here can do for you. Removing a
+domain takes its zone and records with it.</div></section>
 <section><h2>Users</h2>
 <table><thead><tr><th>Email</th><th>Groups</th><th>Mailbox</th><th>Active</th><th></th></tr></thead>
 <tbody id="users"></tbody></table>
@@ -743,14 +858,17 @@ async function load(){
   document.getElementById('who').textContent=s.user.email+' \\u2022 groups: '+s.user.groups.join(', ');
   const d=document.getElementById('domains');d.innerHTML='';
   s.domains.forEach(x=>{const b=document.createElement('button');b.className='bad';
-    b.textContent='Remove';b.onclick=async()=>{if(!confirm('Remove '+x.name+'?'))return;
-      try{await api('/api/domains',{action:'remove',name:x.name},'POST');
-      toast('removed '+x.name,'ok');load()}catch(e){toast(e.message,'bad')}};
+    b.textContent='Remove';b.onclick=async()=>{if(!confirm('Remove '+x.name+' and its DNS zone?'))return;
+      try{const r=await api('/api/domains',{action:'remove',name:x.name},'POST');
+      toast('removed '+x.name+(r.zone?(r.zone.error?' (zone: '+r.zone.error+')':
+        ' and its zone'):''),'ok');load()}catch(e){toast(e.message,'bad')}};
     const zone=document.createElement('button');zone.className='ghost';zone.textContent='Create zone';
     zone.style.marginRight='6px';zone.onclick=async()=>{try{const r=await api('/api/domains',
       {action:'zone',name:x.name},'POST');
+      const d=r.delegation;
       toast('Zone '+r.domain+' '+(r.created?'created':'already present')+' via '+r.resolver+
-        '. '+r.next,'ok');load()}catch(e){toast(e.message,'bad')}};
+        (d&&!d.error?(d.mode==='estate'?('; delegated inside '+d.parent):'; at your registrar: '+d.action):''),
+        'ok');load()}catch(e){toast(e.message,'bad')}};
     const pub=document.createElement('button');pub.className='ghost';pub.textContent='Publish DNS';
     pub.style.marginRight='6px';pub.onclick=async()=>{try{const r=await api('/api/domains',
       {action:'publish',name:x.name},'POST');
@@ -772,11 +890,24 @@ async function load(){
       x.mailbox?'<span class="ok">yes</span>':'<span class="warn">no</span>',
       x.active?'<span class="ok">yes</span>':'<span class="bad">no</span>',actions]))});
 }
+function summary(r){const bits=[];
+  if(r.zone){
+    if(r.zone.error)bits.push('zone: '+r.zone.error);
+    else{bits.push('zone '+(r.zone.created?'created':'already present')+' via '+r.zone.resolver);
+      const d=r.zone.delegation;
+      if(d&&!d.error)bits.push(d.mode==='estate'?('delegated inside '+d.parent):
+        ('at your registrar: '+d.action));
+      else if(d&&d.error)bits.push('delegation: '+d.error)}}
+  if(r.dns){
+    if(r.dns.error)bits.push('DNS: '+r.dns.error);
+    else if(r.dns.skipped)bits.push('DNS skipped: '+r.dns.skipped);
+    else bits.push('DNS '+r.dns.added+' record(s)')}
+  return bits.join('; ')}
 document.getElementById('domainForm').onsubmit=async e=>{e.preventDefault();
   const f=new FormData(e.target);
   try{const r=await api('/api/domains',{action:'add',name:f.get('name'),
     description:f.get('description')||null},'POST');
-    toast('Added '+r.domain+'. Stalwart is issuing DKIM, DNS records and a certificate.','ok');
+    toast('Added '+r.domain+' — '+summary(r),'ok');
     e.target.reset();load()}catch(err){toast(err.message,'bad')}};
 document.getElementById('userForm').onsubmit=async e=>{e.preventDefault();
   const f=new FormData(e.target);

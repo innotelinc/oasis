@@ -10,7 +10,7 @@ These scripts make Stalwart a pure consumer of that trust:
 
 | Script | Role |
 | --- | --- |
-| `cerulean.py` | Service-bridge client (`Bearer ceru_…`). Resolves the key from `CERULEAN_SERVICE_KEY`, `/etc/oasis/cerulean-service.key`, or **Cerulean Vault** (`cerulean/oasis#cerulean_service_key`) via `VAULT_TOKEN_FILE`. Covers certificates, DNS records, and `ensure_zone()` → `POST /service/domains`, which has Cerulean mint a name's authoritative zone (idempotent). |
+| `cerulean.py` | Service-bridge client (`Bearer ceru_…`). Resolves the key from `CERULEAN_SERVICE_KEY`, `/etc/oasis/cerulean-service.key`, or **Cerulean Vault** (`cerulean/oasis#cerulean_service_key`) via `VAULT_TOKEN_FILE`. Covers certificates, DNS records, `ensure_zone()` → `POST /service/domains` (mint a name's zone) and `delete_zone()` → `DELETE /service/domains` (give it back). Both are idempotent. |
 | `stalwart_cerulean_only.py` | Flips every Stalwart domain to `dnsManagement: Manual` + `certificateManagement: Manual` and removes the direct Technitium `DnsServer` and the unused `AcmeProvider`, so Stalwart stops writing DNS/ACME and Cerulean is the sole Technitium writer. |
 | `stalwart_install_cert.py` | Fetches the `*.innotel.us` wildcard (chain + key) from Cerulean, writes it to `/etc/stalwart/tls/`, and registers it as the default `Certificate`. Idempotent: a matching expiry + SAN set is a no‑op so the timer is cheap. |
 | `cerulean_publish_zone.py` | Publishes Stalwart's generated zone through the bridge. Records are classed `exact` / `add` / `singleton` / `override` so a run never duplicates a singleton (SPF, DMARC, MX, CAA `issue`, CNAME) and never writes over an estate‑owned value. |
@@ -39,7 +39,17 @@ name with Cerulean and mints its authoritative Technitium zone. The mail admin p
 uses it when a domain is added (and as a standalone **Create zone** action), so a new
 mail domain gets its zone from Cerulean rather than being created out of band. The
 branch is idempotent: a name Cerulean already serves returns `created: False`.
-Delegating the zone at the registrar (NS) remains a manual step.
+
+`delete_zone(name)` is its counterpart (`DELETE /service/domains`): it drops the zone
+and its registration together, so a name a stack registered can be handed back rather
+than left answering forever. Cerulean refuses its own platform zones (the server
+identity apex and lab domain) to a service key.
+
+Delegation follows the same rule — Cerulean does it. A name inside a zone Cerulean
+already serves is delegated into that parent automatically (the child's NS records are
+written into the parent, and removed again on `delete_zone`). Only a brand-new apex
+needs a registrar NS change, and no registrar API exists in the estate, so callers
+report the nameservers to use rather than pretending to act.
 
 ## Install
 

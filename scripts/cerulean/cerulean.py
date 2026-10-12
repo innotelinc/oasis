@@ -13,6 +13,8 @@ they hold a path-scoped Cerulean **service key** and call:
     GET  /api/service/domains                      list registered zones (own tenant)
     POST /api/service/domains                      create  {name} — registers the domain
                                                    and mints its authoritative Technitium zone
+    DELETE /api/service/domains                     remove  {name} — drops the zone and the
+                                                   registration (platform zones refused)
     GET  /api/service/dns/records?zone=ZONE        list a zone
     POST /api/service/dns/records                  add   {zone, type, name, value, ttl, priority}
     DELETE /api/service/dns/records                remove{zone, type, name, value}
@@ -161,6 +163,24 @@ class Cerulean:
         except CeruleanError as exc:
             if "HTTP 409" in str(exc):
                 return {"domain": domain, "created": False, "detail": "already registered"}
+            raise
+
+    def delete_zone(self, domain: str) -> dict:
+        """Unregister `domain` with Cerulean, which removes its authoritative zone.
+
+        Idempotent from the caller's point of view: a domain Cerulean does not
+        serve comes back as `deleted: False` rather than raised, so "make sure
+        this zone is gone" never has to know whether it existed beforehand. A
+        platform zone (the estate apex) is refused by the bridge with HTTP 403
+        and *is* raised — that is a real refusal, not an absent zone.
+        """
+        domain = domain.strip().lower().rstrip(".")
+        try:
+            self.call("/service/domains", "DELETE", {"name": domain})
+            return {"domain": domain, "deleted": True}
+        except CeruleanError as exc:
+            if "HTTP 404" in str(exc):
+                return {"domain": domain, "deleted": False, "detail": "not registered"}
             raise
 
     # ── DNS records ─────────────────────────────────────────────────────────
