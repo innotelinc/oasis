@@ -1,0 +1,22 @@
+[Unit]
+Description=Oasis mail administration (domains and users)
+Documentation=https://github.com/innotelinc/oasis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# OIDC-native against Cerulean Authentik: add and remove mail domains and users,
+# wiring each user into Authentik and Stalwart together.
+ExecStart=/usr/bin/python3 /opt/oasis/scripts/oasis-mail-admin.py
+EnvironmentFile=/etc/oasis/oasis-mail-admin.env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/oasis /etc/stalwart
+
+[Install]
+WantedBy=multi-user.target

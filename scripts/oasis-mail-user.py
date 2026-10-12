@@ -20,6 +20,7 @@ the Stalwart mailbox that receives their mail. `remove` reverses both.
     python3 oasis-mail-user.py add --email jane@innotel.us --name "Jane Doe" \
         --groups paid_users
     python3 oasis-mail-user.py add --email jane@innotel.us --apply
+    python3 oasis-mail-user.py passwd --email jane@innotel.us --apply
     python3 oasis-mail-user.py remove --email jane@innotel.us --apply
 
 Authentik credentials come from **Cerulean Vault** (`cerulean/oasis`:
@@ -32,7 +33,9 @@ import argparse
 import base64
 import json
 import os
+import secrets
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -113,17 +116,34 @@ class Authentik:
         created = self.call("/api/v3/core/groups/", "POST", {"name": name})
         return created
 
-    def create_user(self, username: str, email: str, name: str, groups: list[str]) -> dict:
+    def create_user(self, username: str, email: str, name: str, group_ids: list[str]) -> dict:
         body = {"username": username, "email": email, "name": name or username,
                 "is_active": True, "path": "users", "attributes": {},
-                "groups": groups}
+                "groups": group_ids}
         return self.call("/api/v3/core/users/", "POST", body)
 
-    def set_groups(self, pk: int, groups: list[str]) -> dict:
-        return self.call(f"/api/v3/core/users/{pk}/", "PATCH", {"groups": groups})
+    def set_groups(self, pk: int, group_ids: list[str]) -> dict:
+        """Replace the user's groups. Authentik wants group **PKs**, not names."""
+        return self.call(f"/api/v3/core/users/{pk}/", "PATCH", {"groups": group_ids})
+
+    def group_ids(self, names: list[str], apply: bool) -> list[str]:
+        """Resolve group names to the PKs Authentik's write API requires."""
+        ids = []
+        for name in names:
+            grp = self.ensure_group(name, apply)
+            if not grp:
+                raise SystemExit(f"could not resolve or create Authentik group {name!r}")
+            ids.append(grp["pk"])
+        return ids
 
     def set_active(self, pk: int, active: bool) -> dict:
         return self.call(f"/api/v3/core/users/{pk}/", "PATCH", {"is_active": active})
+
+    def set_password(self, pk: int, password: str) -> None:
+        self.call(f"/api/v3/core/users/{pk}/set_password/", "POST", {"password": password})
+
+    def password_change_date(self, pk: int) -> str | None:
+        return self.call(f"/api/v3/core/users/{pk}/").get("password_change_date")
 
     def delete_user(self, pk: int) -> None:
         self.call(f"/api/v3/core/users/{pk}/", "DELETE")
@@ -241,16 +261,11 @@ def cmd_add(args, ak: Authentik, sw: Stalwart) -> int:
         print("\n--check: would create/complete the Authentik user and the mailbox")
         return 0
 
-    group_ids = []
-    for g in wanted:
-        grp = ak.ensure_group(g, apply=True)
-        if not grp:
-            raise SystemExit(f"could not resolve or create Authentik group {g!r}")
-        group_ids.append(grp["pk"])
+    group_ids = ak.group_ids(wanted, apply=True)
 
     if ak_user:
         merged = sorted(set(ak.user_groups(ak_user)) | set(wanted))
-        ak.set_groups(ak_user["pk"], merged)
+        ak.set_groups(ak_user["pk"], ak.group_ids(merged, apply=True))
         if not ak_user.get("is_active"):
             ak.set_active(ak_user["pk"], True)
         print(f"authentik: updated (groups={merged}, active)")
@@ -272,6 +287,42 @@ def cmd_add(args, ak: Authentik, sw: Stalwart) -> int:
     print(f"\nverified : sso_group={DEFAULT_MAIL_GROUP in ak.user_groups(verify_user)} "
           f"mailbox={bool(verify_box)} active={verify_user.get('is_active')}")
     return 0 if ok else 1
+
+
+def cmd_passwd(args, ak: Authentik, sw: Stalwart) -> int:
+    """Rotate the mailbox's Authentik password and record it where the operator reads it."""
+    email = args.email.strip()
+    user = ak.user(email)
+    if not user:
+        raise SystemExit(f"{email}: no such Authentik user")
+    out = Path(args.out or f"/root/{email.split('@')[0]}-credential.txt")
+    print(f"email    : {email}")
+    print(f"authentik: pk={user['pk']} username={user.get('username')} "
+          f"active={user.get('is_active')} groups={ak.user_groups(user)}")
+    print(f"file     : {out}{'' if out.exists() else ' (new)'}")
+    if not args.apply:
+        print("\n--check: would set a new random password and write it to the file")
+        return 0
+
+    before = ak.password_change_date(user["pk"])
+    password = secrets.token_urlsafe(18)
+    ak.set_password(user["pk"], password)
+    after = ak.password_change_date(user["pk"])
+    if after == before:
+        print("FAIL: password_change_date did not move - password not applied",
+              file=sys.stderr)
+        return 1
+
+    if out.exists():
+        backup = out.with_name(f"{out.name}.{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.bak")
+        backup.write_text(out.read_text(encoding="utf-8"), encoding="utf-8")
+        backup.chmod(0o600)
+        print(f"backup   : {backup}")
+    out.write_text(f"{email} / {password}\n", encoding="utf-8")
+    out.chmod(0o600)
+    print(f"rotated  : password_change_date {before} -> {after}")
+    print(f"written  : {out} (mode 600; password not printed here)")
+    return 0
 
 
 def cmd_remove(args, ak: Authentik, sw: Stalwart) -> int:
@@ -319,9 +370,15 @@ def main() -> int:
                       help="delete the Authentik user instead of deactivating it")
     p_rm.add_argument("--apply", action="store_true")
 
+    p_pw = sub.add_parser("passwd", help="rotate the user's Authentik password")
+    p_pw.add_argument("--email", required=True)
+    p_pw.add_argument("--out", help="credential file (default /root/<localpart>-credential.txt)")
+    p_pw.add_argument("--apply", action="store_true")
+
     args = ap.parse_args()
     ak, sw = Authentik(), Stalwart()
-    return {"list": cmd_list, "add": cmd_add, "remove": cmd_remove}[args.cmd](args, ak, sw)
+    return {"list": cmd_list, "add": cmd_add, "remove": cmd_remove,
+            "passwd": cmd_passwd}[args.cmd](args, ak, sw)
 
 
 if __name__ == "__main__":
