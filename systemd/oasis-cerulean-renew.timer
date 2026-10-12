@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Cerulean renewal for the Oasis mail platform
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

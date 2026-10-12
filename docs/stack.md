@@ -65,6 +65,25 @@ layer consumes it (ONYX's Go services, Distro's Node control plane, Zeus at boot
 Atlas at setup). This repo has no resolver, so `.env` must hold the resolved
 value — a reference left in place reaches the container as a literal string.
 
+## Trust (Cerulean)
+
+**Cerulean owns DNS and TLS for the mail platform.** It runs the estate's Technitium
+and is the only principal permitted to write to it, and it issues the mail wildcard's
+Let's Encrypt certificate (`*.innotel.us`) with a DNS‑01 challenge written straight
+into Technitium. Oasis never talks to Technitium or to an ACME CA itself; it holds a
+path‑scoped Cerulean service key (`ceru_…`, kept in Cerulean Vault at
+`cerulean/oasis#cerulean_service_key`) and pulls certificate material and pushes DNS
+records over Cerulean's service bridge.
+
+The mail server reflects that: every Stalwart domain is `dnsManagement: Manual` and
+`certificateManagement: Manual`, the direct Technitium `DnsServer` (a TSIG key) and the
+server's own `AcmeProvider` are removed, and `scripts/cerulean/` does the rest —
+`stalwart_cerulean_only.py` flips the posture, `stalwart_install_cert.py` installs the
+wildcard, `cerulean_publish_zone.py` publishes Stalwart's generated DKIM/SPF/DMARC/MTA‑STS/
+autoconfig records (singleton‑ and override‑aware, so it never duplicates an SPF/DMARC/CAA
+or overwrites an estate‑owned value), and `oasis-cerulean-renew.timer` runs both daily.
+See [`scripts/cerulean/README.md`](../scripts/cerulean/README.md) for the full model.
+
 ## Golden rules
 
 - **Authentik = Identity** · **Cerulean Vault = Secrets** · **Cerulean = Trust** ·

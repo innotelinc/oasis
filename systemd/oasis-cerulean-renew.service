@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Stalwart TLS + DNS through Cerulean
+After=network-online.target stalwart.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/oasis/scripts/cerulean-renew.sh
