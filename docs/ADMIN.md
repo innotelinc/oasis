@@ -13,12 +13,12 @@ A mail account here is two records that have to agree:
 | **Authentik** | the person, their groups, their password | `scripts/oasis-mail-admin.py` |
 | **Stalwart** | the mailbox (a `User` account, **no** credential) | `scripts/oasis-mail-admin.py` |
 
-Stalwart authenticates against the external Authentik OIDC directory. With an
-external directory it refuses to write credentials — so its own admin UI cannot
-create a user ("*i cannot add another user with SSO enabled*"). There is no
-Stalwart-side fix that keeps the estate's single identity store; the account must
-be created in Authentik, and the mailbox created here as a side effect. That is
-exactly what this page does.
+This estate signs in through Cerulean Authentik (SSO). When Stalwart
+authenticates a user against an external directory it refuses to write credentials
+for that account ("*i cannot add another user with SSO enabled*") — so its own admin
+UI cannot create a user. There is no Stalwart-side fix that keeps the estate's
+single identity store; the account must be created in Authentik, and the mailbox
+created here as a side effect. That is exactly what this page does.
 
 A mail domain lives in two planes too: a **Stalwart** record (DKIM keys,
 automatic certificate) and an authoritative **DNS zone** that **Cerulean** owns
@@ -102,7 +102,7 @@ Cerulean itself could not create the zone.
 
 ## Deploy
 
-1. Install the script and unit:
+1. Install the script and unit from this repo:
 
    ```bash
    install -m 0644 scripts/oasis-mail-admin.py /opt/oasis/scripts/oasis-mail-admin.py
@@ -115,6 +115,15 @@ Cerulean itself could not create the zone.
    # set SESSION_SECRET, then:
    systemctl daemon-reload && systemctl enable --now oasis-mail-admin
    ```
+
+   This file and its companion scripts describe the **Oasis mail stack as shipped
+   in this repo** — Compose, Zimbra, npm-proxy-hosts, `local|production` setup
+   modes, and `scripts/setup-oasis.sh`. The estate this machine actually runs is
+   **Stalwart on the host**, configured by `recon/cerulean.py` and
+   `/opt/oasis/scripts/setup-oasis.sh`; the environment template
+   `scripts/oasis-mail-admin.env.example` (and the operations in this script) are
+   written for that estate, which is why they read `STALWART_ENV` and
+   `PROTECTED_ZONES` rather than any Compose/Zimbra settings.
 
 2. Publish the name through the edge (NPM) and point DNS at the edge — the
    redirect URI is `https://admin.oasis.innotel.us/auth/callback`, so the host

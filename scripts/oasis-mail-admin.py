@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Oasis mail administration — add and remove mail domains and users from a page.
+"""Oasis mail administration — add and remove mail domains and users from a page
 
-Stalwart's own admin UI cannot create a user here: this estate's Stalwart
-authenticates against the external Authentik OIDC directory, and Stalwart refuses
-to write credentials for an external-directory account ("i cannot add another
-user with sso enabled"). A mail account is therefore two records that must agree,
-and this service is where they are created together:
+Stalwart's own admin UI cannot create a user here: this estate signs in through
+Cerulean Authentik (SSO), and when Stalwart authenticates a user against an
+external directory it refuses to write credentials for that account ("i cannot add
+another user with sso enabled"). A mail account is therefore two records that must
+agree, and this service is where they are created together:
 
   * **Authentik** — the person: the user object and membership of the account
     groups (`Mail`, plus any extras). Cerulean Authentik is the only identity
-    source, so this is also the account's password store.
+    source, so this is also the account's password store
   * **Stalwart** — the mailbox: a `User` account with no credential, because the
-    credential is Authentik's.
+    credential is Authentik's
 
 Domains are a single record (Stalwart), created the way innotel.us already is:
 automatic DKIM, automatic DNS publishing against the estate's resolver, and an
-automatic Let's Encrypt certificate.
+automatic Let's Encrypt certificate
 
 ## Who may use it
 
@@ -24,7 +24,7 @@ allows no third pattern (no forward-auth, no second password store). The browser
 is sent through a real authorization-code + PKCE flow with the existing
 `oasis-admin` client, the id_token is verified against Authentik's JWKS, and the
 caller must be a member of `OASIS_ADMIN_GROUP` (default `Oasis`), checked against
-Authentik's own group records rather than trusted from a token claim.
+Authentik's own group records rather than trusted from a token claim
 
 ## Interface
 
@@ -40,7 +40,7 @@ Authentik's own group records rather than trusted from a token claim.
 Reads the Stalwart recovery admin from /etc/stalwart/stalwart.env and the
 Authentik admin token from Cerulean Vault (`/etc/oasis/vault-token`); the OIDC
 client secret is fetched from Authentik at runtime rather than stored. Nothing
-secret is logged or returned except a password the operator just asked for.
+secret is logged or returned except a password the operator just asked for
 """
 import base64
 import hashlib
@@ -63,8 +63,25 @@ try:
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
     from cryptography.hazmat.primitives.asymmetric import rsa
-except ImportError:  # pragma: no cover - dependency is present on the hosts we deploy to
+except ImportError:  # pragma: no cover - dependency is present on the hosts we deploy to.
     rsa = None
+
+def _add_cerulean_to_path() -> None:
+    """Make the Cerulean client importable in either layout this file runs from
+
+    In this repo the client lives in `scripts/cerulean/`; on the mail host it sits
+    beside this script (`/opt/oasis/scripts/cerulean.py`). Both directories go on
+    the path so `cerulean` and `cerulean_publish_zone` resolve either way —
+    `scripts/cerulean/` alone is a namespace package with no `Cerulean` in it, so
+    the script's own directory has to be there too
+    """
+    here = Path(__file__).resolve().parent
+    seen: set[str] = set(sys.path)
+    for candidate in (here / "cerulean", here):
+        if candidate.is_dir() and str(candidate) not in seen:
+            sys.path.insert(0, str(candidate))
+            seen.add(str(candidate))
+
 
 # ── configuration ───────────────────────────────────────────────────────────
 LISTEN = os.environ.get("LISTEN", "0.0.0.0:8091")
@@ -527,7 +544,7 @@ def remove_user(email: str) -> dict:
 
 
 def delegate_zone(name: str) -> dict:
-    """Make `name` resolve, delegating it through Cerulean wherever Cerulean can.
+    """Make `name` resolve, delegating it through Cerulean wherever Cerulean can
 
     Cerulean owns the estate resolver, so delegation is its call, not the
     operator's:
@@ -535,13 +552,13 @@ def delegate_zone(name: str) -> dict:
     * A name inside a zone Cerulean already serves is delegated into that parent
       automatically — the child's NS records are written into the parent zone, so
       the name is delegated by the resolver itself rather than by hand. This is
-      the common case: `signara.innotel.us` sits inside `innotel.us`.
+      the common case: `signara.innotel.us` sits inside `innotel.us`
     * A name at the apex of a domain nobody has delegated yet still needs its
       registrar pointed at the estate nameservers. No registrar API exists in
       this estate, so that one step is reported with the exact servers to use —
-      it is a registration act, not something the mail service can perform.
+      it is a registration act, not something the mail service can perform
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    _add_cerulean_to_path()
     from cerulean import Cerulean, CeruleanError  # noqa: E402
 
     name = name.strip().lower().rstrip(".")
@@ -560,7 +577,7 @@ def delegate_zone(name: str) -> dict:
         return n == parent or n.endswith("." + parent)
 
     # The bridge ignores a zone it does not serve on read, so keep only rows that
-    # really are the parent's before trusting any of them.
+    # really are the parent's before trusting any of them
     parent_rows = [r for r in client.records(parent) if in_parent(r)]
     targets = [str(r.get("value") or "").lower().rstrip(".")
                for r in parent_rows
@@ -586,16 +603,16 @@ def delegate_zone(name: str) -> dict:
 
 
 def create_zone(name: str) -> dict:
-    """Register this mail domain with Cerulean, which mints its authoritative zone.
+    """Register this mail domain with Cerulean, which mints its authoritative zone
 
     Cerulean (TrustOps) owns the estate resolver: it runs Technitium and is the
     only principal allowed to create zones and write records into it. Stalwart's
     own DNS publisher is switched off, so a new mail domain must have its zone
     created here first — otherwise there is nothing for DKIM/SPF/DMARC to be
     published into, and the name never resolves. Idempotent: a domain Cerulean
-    already serves comes back with ``created: False`` rather than an error.
+    already serves comes back with ``created: False`` rather than an error
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    _add_cerulean_to_path()
     from cerulean import Cerulean, CeruleanError  # noqa: E402
 
     name = name.strip().lower().rstrip(".")
@@ -614,15 +631,15 @@ def create_zone(name: str) -> dict:
 
 
 def publish_dns(name: str) -> dict:
-    """Write this domain's generated DKIM/SPF/DMARC (and friends) through Cerulean.
+    """Write this domain's generated DKIM/SPF/DMARC (and friends) through Cerulean
 
     Stalwart renders the zone but its own publisher is switched off — Cerulean is
     the only principal allowed to write the estate's resolver. Nothing is written
     into a zone the resolver does not already serve: a brand-new domain reports
     that its zone must be created first rather than inventing records for a name
-    that does not resolve.
+    that does not resolve
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    _add_cerulean_to_path()
     import cerulean_publish_zone as cz  # noqa: E402
     from cerulean import Cerulean, CeruleanError  # noqa: E402
 
@@ -649,7 +666,7 @@ def publish_dns(name: str) -> dict:
     # does serve, so an unserved domain looks like it has records. Only publish
     # when every record that came back really is inside this zone; otherwise the
     # zone does not exist yet and writing here would mint a private zone that DNS
-    # never delegates to (and that nothing will ever clean up).
+    # never delegates to (and that nothing will ever clean up)
     if not live_rows or not any(belongs(r.get("name")) for r in live_rows):
         return {"domain": name, "skipped": "the resolver does not serve this zone — "
                 "create the zone first (Cerulean mints it), then publish"}
@@ -700,7 +717,7 @@ def add_domain(name: str, description: str | None) -> dict:
               "next": [f"MX at {MX_HOST} if this domain receives mail"]}
     # Mint the authoritative zone through Cerulean before publishing: Cerulean
     # owns the resolver, and DKIM/SPF/DMARC have nowhere to go until the zone
-    # exists. Both steps are idempotent, so re-running add is safe.
+    # exists. Both steps are idempotent, so re-running add is safe
     try:
         result["zone"] = create_zone(name)
     except Exception as exc:  # noqa: BLE001 - the domain is created either way
@@ -713,15 +730,15 @@ def add_domain(name: str, description: str | None) -> dict:
 
 
 def delete_zone(name: str) -> dict:
-    """Unregister this domain with Cerulean, which removes its authoritative zone.
+    """Unregister this domain with Cerulean, which removes its authoritative zone
 
     The counterpart of creating the zone: leaving it behind keeps the name
     answering (and its DKIM/SPF/DMARC live) after the domain it was for is gone,
     which nothing would ever clean up. Idempotent — a zone Cerulean does not
     serve reports ``deleted: False`` rather than failing. Cerulean refuses its
-    own platform zones outright.
+    own platform zones outright
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    _add_cerulean_to_path()
     from cerulean import Cerulean, CeruleanError  # noqa: E402
 
     name = name.strip().lower().rstrip(".")
@@ -735,7 +752,7 @@ def delete_zone(name: str) -> dict:
     result["resolver"] = "Cerulean (Technitium)"
     # A child zone was delegated into its parent by `delegate_zone`; removing the
     # zone has to take that delegation with it, or the parent keeps pointing at a
-    # name that no longer answers.
+    # name that no longer answers
     served = sorted((str(d.get("name") or "").lower() for d in client.domains() if d.get("name")),
                     key=len, reverse=True)
     parent = next((z for z in served if z != name and name.endswith("." + z)), None)
