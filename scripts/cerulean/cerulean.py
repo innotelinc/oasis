@@ -17,7 +17,11 @@ they hold a path-scoped Cerulean **service key** and call:
                                                    registration (platform zones refused)
     GET  /api/service/dns/records?zone=ZONE        list a zone
     POST /api/service/dns/records                  add   {zone, type, name, value, ttl, priority}
-    DELETE /api/service/dns/records                remove{zone, type, name, value}
+    DELETE /api/service/dns/records                 remove{zone, type, name, value}
+    GET  /api/service/whoami                       the key's own identity: name, scopes, tenant
+    POST /api/service/tenants                      provision a tenant {domain, email, …} —
+                                                   register its zone, then have its mail domain
+                                                   and first account created
 
 All calls authenticate with `Authorization: Bearer ceru_<prefix>_<secret>`.
 
@@ -110,11 +114,22 @@ class Cerulean:
         req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                status = resp.status
                 raw = resp.read().decode()
-                return resp.status, (json.loads(raw) if raw else None)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode()[:400]
             raise CeruleanError(f"{method} {path}: HTTP {exc.code} {detail}") from None
+        if not raw.strip():
+            return status, None
+        try:
+            return status, json.loads(raw)
+        except ValueError:
+            # A JSON bridge that answers with something else is not answering — a
+            # web tier that serves its own page for a path it does not have, say, or
+            # a proxy in between. Saying so is the point: a parse error here reads
+            # like the *caller's* mistake and hides what actually happened.
+            raise CeruleanError(f"{method} {path}: HTTP {status} non-JSON reply "
+                                f"({raw.strip()[:80]!r})") from None
 
     # ── certificates ────────────────────────────────────────────────────────
     def certificates(self) -> list[dict]:
@@ -147,6 +162,37 @@ class Cerulean:
     def domains(self) -> list[dict]:
         """Every zone registered to this key's tenant."""
         return self.call("/service/domains")[1] or []
+
+    def whoami(self) -> dict:
+        """What Cerulean says this key is: `{name, prefix, scopes, tenantId, …}`.
+
+        The estate's services keep no copy of who may call them — they ask the
+        trust owner on every request, so revocation is immediate and there is no
+        second list to drift. A key Cerulean does not know (revoked, never minted,
+        from another estate) raises `CeruleanError`, which is the only answer a
+        caller should read as "no".
+        """
+        return self.call("/service/whoami")[1] or {}
+
+    def provision_tenant(self, domain: str, email: str, name: str | None = None,
+                         groups: list[str] | None = None,
+                         description: str | None = None) -> dict:
+        """Create a tenant through Cerulean: its zone, its mail domain, its first account.
+
+        This is the estate's integration point — an application holds a Cerulean
+        service key and calls this, and Cerulean is what registers the zone and
+        has the mail side created. Idempotent at every step, so a retried webhook
+        gets the same tenant back rather than a second one.
+        """
+        payload: dict = {"domain": domain.strip().lower().rstrip("."),
+                         "email": email.strip().lower()}
+        if name:
+            payload["name"] = name
+        if groups:
+            payload["groups"] = groups
+        if description:
+            payload["description"] = description
+        return self.call("/service/tenants", "POST", payload)[1] or {}
 
     def ensure_zone(self, domain: str) -> dict:
         """Register `domain` with Cerulean, which mints its authoritative zone.

@@ -100,6 +100,13 @@ belong to the zone before writing, so it never mints a private zone DNS would no
 delegate to. With zone creation wired in, that branch is only reached when
 Cerulean itself could not create the zone.
 
+## Provisioning tenants from another platform
+
+This page is for operators. An application does not drive it: it calls Cerulean,
+which registers the tenant's zone and has the mail half built here
+(`POST /api/service/provision`). The whole contract — the one call, its scopes,
+its idempotency and its error codes — is in `docs/MAIL-PROVISIONING.md`.
+
 ## Deploy
 
 1. Install the script and unit from this repo:

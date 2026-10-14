@@ -112,6 +112,30 @@ USING = ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"]
 DEFAULT_MAIL_GROUP = "Mail"
 COOKIE = "oasis_admin"
 
+# ── machine surface — Cerulean only ─────────────────────────────────────────
+# An application does **not** call this host. It calls **Cerulean**, the estate's
+# trust owner, and Cerulean registers the tenant and its zone, then calls the
+# route below to create the mail half of it. So the only credential that works
+# here is a Cerulean service key (`ceru_…`), and it is verified *with Cerulean on
+# every call* — there is no token list on this host to drift out of step, and
+# revoking a key in Cerulean revokes it here on the next request. The estate has
+# exactly one credential authority, and it is not this service.
+#
+# `MAIL_SERVICE_CLIENTS` is the second lock: only these addresses may reach
+# `/api/service/*` at all, so the machine surface is not on the internet even for
+# a caller holding a key. Cerulean's bridge is the caller, so it names Cerulean.
+SERVICE_CLIENTS = {c.strip() for c in os.environ.get(
+    "MAIL_SERVICE_CLIENTS", "192.168.1.71,127.0.0.1,::1").split(",") if c.strip()}
+# What Cerulean must say the caller's key is scoped for. Both are Cerulean's
+# vocabulary, not this service's: this service only asks Cerulean the question.
+PROVISION_SCOPE = os.environ.get("PROVISION_SCOPE", "mail:provision")
+READ_SCOPE = os.environ.get("READ_SCOPE", "mail:read")
+
+
+class NotFound(RuntimeError):
+    """The caller named something that is not here — a 404, not a bad request."""
+
+
 if not SESSION_SECRET:
     for candidate in (Path("/etc/oasis/oasis-mail-admin.secret"),
                       Path(__file__).resolve().with_name(".oasis-mail-admin.secret")):
@@ -127,6 +151,98 @@ if not SESSION_SECRET:
 def log(msg: str) -> None:
     print(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {SERVICE}: {msg}",
           flush=True)
+
+
+# ── machine surface — Cerulean only ─────────────────────────────────────────
+def bearer(header: str) -> str:
+    """The bearer credential on an `Authorization` header, or "" when there is none."""
+    value = (header or "").strip()
+    return value[7:].strip() if value.lower().startswith("bearer ") else ""
+
+
+def scope_allows(scopes: list, scope: str) -> bool:
+    """Whether a Cerulean key carrying `scopes` covers `scope` (`mail:provision`).
+
+    `mail:*` covers every mail scope and `*` covers everything, matching the
+    Cerulean bridge's own prefix sugar, so a scope is spelled once — there.
+    """
+    have = {str(s).strip().lower() for s in scopes or []}
+    want = scope.lower()
+    return "*" in have or want in have or f"{want.split(':')[0]}:*" in have
+
+
+def bridge_has_no_whoami(message: str) -> bool:
+    """Whether a `whoami` failure means "this bridge has no such route".
+
+    Two shapes seen in the field: a bridge old enough to 404 the path, and one
+    whose web tier answers a path it does not have with its own page — HTTP 200
+    and HTML, as the estate's Cerulean does (its SPA serves unmatched routes).
+    Only these fall back; a 401/403 is the trust owner's actual answer and stands.
+    """
+    return "HTTP 404" in message or "non-JSON" in message
+
+
+def cerulean_identity(presented: str) -> dict:
+    """What Cerulean says `presented` is: `{name, scopes, …}`, or a refusal.
+
+    Cerulean is the point of truth, so this service keeps no copy of who may call
+    it: every request is adjudicated by asking the owner. A key Cerulean does not
+    know (revoked, never minted, wrong estate) raises `CeruleanError`.
+    """
+    _add_cerulean_to_path()
+    from cerulean import Cerulean, CeruleanError  # noqa: E402
+
+    client = Cerulean(key=presented)
+    try:
+        return client.whoami()
+    except CeruleanError as exc:
+        # Rather than refusing service until Cerulean is upgraded, ask the
+        # strongest question an older bridge can answer — is this key live, and
+        # does Cerulean let it touch domains — and say plainly that the scopes
+        # were not checked. A key the bridge does not know still fails here, so
+        # the fallback admits nobody Cerulean refuses.
+        if not bridge_has_no_whoami(str(exc)):
+            raise
+    client.domains()
+    log("warning: Cerulean has no /service/whoami — verified the key by its domain "
+        "authority instead of its scopes; deploy the whoami route for strict checks")
+    return {"name": "cerulean-key", "verified": "domains",
+            "scopes": [PROVISION_SCOPE, READ_SCOPE]}
+
+
+def service_authorize(authorization: str, scope: str) -> tuple[dict | None, int, str]:
+    """(client, status, error) for a machine request that needs `scope`.
+
+    No credential is a 401, a key Cerulean does not recognise is a 401, and a key
+    Cerulean does recognise but without the scope is a 403. When Cerulean cannot
+    be reached this **refuses** (503) rather than falling back to anything local:
+    without the trust owner there is no authority to check against. A browser
+    session is a different principal, so there is deliberately no fallback to it.
+    """
+    _add_cerulean_to_path()
+    from cerulean import CeruleanError  # noqa: E402
+
+    presented = bearer(authorization)
+    if not presented:
+        return None, 401, "missing service token (Authorization: Bearer ceru_…)"
+    if not presented.startswith("ceru_"):
+        return None, 401, "not a Cerulean service key"
+    try:
+        identity = cerulean_identity(presented)
+    except CeruleanError:
+        return None, 401, "Cerulean does not recognise this service key"
+    except (urllib.error.URLError, OSError) as exc:
+        log(f"Cerulean unreachable while verifying a service key: {exc}")
+        return None, 503, "Cerulean is unreachable — refusing to act without the trust owner"
+    except Exception as exc:  # noqa: BLE001 - nothing is admitted unverified
+        # Anything else means the key could not be checked, and an unchecked key is
+        # refused. It must not surface as a client error: the caller's request may
+        # be perfectly good while the trust owner is the thing misbehaving.
+        log(f"could not verify a service key with Cerulean: {type(exc).__name__}: {exc}")
+        return None, 503, "Cerulean could not confirm this key — refusing to act without the trust owner"
+    if not scope_allows(identity.get("scopes") or [], scope):
+        return None, 403, f"this key is not scoped for {scope} in Cerulean"
+    return identity, 200, ""
 
 
 # ── Cerulean Vault ──────────────────────────────────────────────────────────
@@ -492,7 +608,20 @@ def list_state() -> dict:
             "mailDomains": [d["name"] for d in domains]}
 
 
-def add_user(email: str, name: str, groups: list[str]) -> dict:
+def add_user(email: str, name: str, groups: list[str], rotate: bool = True) -> dict:
+    """Create or extend one account on both planes.
+
+    `rotate` writes a fresh Authentik password and returns it, and defaults to
+    True because that is what the page means by **Add user**: an operator asking
+    for an account wants a credential. A retried provisioning call passes False —
+    the account already has a password the caller was handed once, and minting a
+    second one would silently invalidate the first.
+
+    Nothing already here is created twice: an existing Authentik user keeps its
+    identity and has the requested groups *merged* into it, and an existing
+    mailbox is left alone. `created` says whether this call actually made
+    something that was not there.
+    """
     ak, sw, _ = services()
     email = email.strip().lower()
     local, _, domain = email.partition("@")
@@ -502,25 +631,30 @@ def add_user(email: str, name: str, groups: list[str]) -> dict:
         raise RuntimeError(f"{domain} is not a mail domain here — add the domain first")
     wanted = [DEFAULT_MAIL_GROUP] + [g for g in groups if g and g != DEFAULT_MAIL_GROUP]
     user = ak.user(email)
-    result: dict = {"email": email, "groups": wanted}
+    result: dict = {"email": email, "created": not user}
     if user:
         merged = sorted(set(ak.user_groups(user)) | set(wanted))
         ak.set_groups(user["pk"], ak.group_ids(merged))
         if not user.get("is_active"):
             ak.set_active(user["pk"], True)
         result["authentik"] = f"updated groups={merged}"
+        result["groups"] = merged
     else:
         created = ak.create_user(local, email, name or local, ak.group_ids(wanted))
         user = created
         result["authentik"] = f"created pk={created.get('pk')}"
+        result["groups"] = sorted(ak.user_groups(user)) or wanted
     if not sw.account(email):
         box = sw.create_mailbox(email, name)
         result["mailbox"] = f"created id={box.get('id')}"
+        result["created"] = True
     else:
         result["mailbox"] = "already present"
-    password = secrets.token_urlsafe(18)
-    ak.set_password(user["pk"], password)
-    result["password"] = password
+    result["password"] = None
+    if rotate:
+        password = secrets.token_urlsafe(18)
+        ak.set_password(user["pk"], password)
+        result["password"] = password
     return result
 
 
@@ -539,11 +673,11 @@ def remove_user(email: str) -> dict:
         sw.destroy_account(box["id"])
         result["mailbox"] = "destroyed"
     if not user and not box:
-        raise RuntimeError(f"{email}: no such user")
+        raise NotFound(f"{email}: no such user")
     return result
 
 
-def delegate_zone(name: str) -> dict:
+def delegate_zone(name: str, key: str = "") -> dict:
     """Make `name` resolve, delegating it through Cerulean wherever Cerulean can
 
     Cerulean owns the estate resolver, so delegation is its call, not the
@@ -562,7 +696,7 @@ def delegate_zone(name: str) -> dict:
     from cerulean import Cerulean, CeruleanError  # noqa: E402
 
     name = name.strip().lower().rstrip(".")
-    client = Cerulean()
+    client = cerulean_client(key)
     served = sorted((str(d.get("name") or "").lower() for d in client.domains() if d.get("name")),
                     key=len, reverse=True)
     parent = next((z for z in served if z != name and name.endswith("." + z)), None)
@@ -602,7 +736,22 @@ def delegate_zone(name: str) -> dict:
             "detail": f"delegated inside {parent} ({' '.join(targets)})"}
 
 
-def create_zone(name: str) -> dict:
+def cerulean_client(key: str = ""):
+    """A Cerulean bridge client using `key`, or the platform's own when empty.
+
+    Empty is not "no key": `cerulean.py` then resolves the platform's key from
+    `CERULEAN_SERVICE_KEY`, the key file, or Cerulean Vault — the estate's normal
+    path for this host. A caller's key is only used when Cerulean itself says the
+    caller may make the write, so the estate's authority is never widened by a
+    passed-through credential.
+    """
+    _add_cerulean_to_path()
+    from cerulean import Cerulean  # noqa: E402
+
+    return Cerulean(key=key or None)
+
+
+def create_zone(name: str, key: str = "") -> dict:
     """Register this mail domain with Cerulean, which mints its authoritative zone
 
     Cerulean (TrustOps) owns the estate resolver: it runs Technitium and is the
@@ -619,18 +768,18 @@ def create_zone(name: str) -> dict:
     if not name or "." not in name:
         raise RuntimeError("that is not a domain name")
     try:
-        result = Cerulean().ensure_zone(name)
+        result = cerulean_client(key).ensure_zone(name)
     except CeruleanError as exc:
         raise RuntimeError(f"Cerulean could not create the zone: {exc}")
     result["resolver"] = "Cerulean (Technitium)"
     try:
-        result["delegation"] = delegate_zone(name)
+        result["delegation"] = delegate_zone(name, key)
     except Exception as exc:  # noqa: BLE001 - the zone exists either way
         result["delegation"] = {"error": str(exc)[:200]}
     return result
 
 
-def publish_dns(name: str) -> dict:
+def publish_dns(name: str, key: str = "") -> dict:
     """Write this domain's generated DKIM/SPF/DMARC (and friends) through Cerulean
 
     Stalwart renders the zone but its own publisher is switched off — Cerulean is
@@ -652,7 +801,7 @@ def publish_dns(name: str) -> dict:
     if not text.strip():
         raise RuntimeError(f"{name}: Stalwart has not rendered a zone for this domain")
 
-    client = Cerulean()
+    client = cerulean_client(key)
     try:
         live_rows = client.records(name)
     except CeruleanError:
@@ -703,27 +852,40 @@ def publish_dns(name: str) -> dict:
             "conflict": conflict, "failed": failed, "records": added[:25]}
 
 
-def add_domain(name: str, description: str | None) -> dict:
+def add_domain(name: str, description: str | None, existing_ok: bool = False,
+               key: str = "") -> dict:
+    """Create a mail domain: the Stalwart record, then its zone and its records.
+
+    `existing_ok` turns this into an ensure — a domain already here is reported
+    instead of refused, and the zone and record steps still run, because they are
+    idempotent and self-healing (a domain whose zone was never minted gets one).
+    Provisioning passes True; the page's **Add domain** passes False, where a
+    duplicate name is a mistake worth surfacing.
+
+    `key` is the Cerulean credential the zone and record writes are made with —
+    empty means the platform's own from the vault (see `cerulean_client`).
+    """
     _, sw, _ = services()
     name = name.strip().lower()
     if not name or "." not in name:
         raise RuntimeError("that is not a domain name")
-    if sw.domain(name):
+    existing = sw.domain(name)
+    if existing and not existing_ok:
         raise RuntimeError(f"{name} already exists in Stalwart")
-    made = sw.create_domain(name, description)
+    made, created = (existing, False) if existing else (sw.create_domain(name, description), True)
     after = sw.domain(name)
-    result = {"domain": name, "id": made.get("id"),
+    result = {"domain": name, "created": created, "id": made.get("id"),
               "enabled": bool(after and after.get("isEnabled")),
               "next": [f"MX at {MX_HOST} if this domain receives mail"]}
     # Mint the authoritative zone through Cerulean before publishing: Cerulean
     # owns the resolver, and DKIM/SPF/DMARC have nowhere to go until the zone
     # exists. Both steps are idempotent, so re-running add is safe
     try:
-        result["zone"] = create_zone(name)
+        result["zone"] = create_zone(name, key)
     except Exception as exc:  # noqa: BLE001 - the domain is created either way
         result["zone"] = {"error": str(exc)[:200]}
     try:
-        result["dns"] = publish_dns(name)
+        result["dns"] = publish_dns(name, key)
     except Exception as exc:  # noqa: BLE001 - the domain is created either way
         result["dns"] = {"error": str(exc)[:200]}
     return result
@@ -774,6 +936,8 @@ def remove_domain(name: str) -> dict:
     name = name.strip().lower()
     if name in PROTECTED_ZONES:
         raise RuntimeError(f"refusing to remove {name}")
+    if not sw.domain(name):
+        raise NotFound(f"{name}: no such domain")
     sw.destroy_domain(name)
     result: dict = {"domain": name, "destroyed": True}
     try:
@@ -783,11 +947,80 @@ def remove_domain(name: str) -> dict:
     return result
 
 
+# One lock per tenant, so two requests for the same domain cannot interleave and
+# build it twice. In-process only, which is enough: this service is the single
+# writer on its host.
+TENANT_LOCKS: dict[str, threading.Lock] = {}
+TENANT_LOCKS_GUARD = threading.Lock()
+
+
+def tenant_lock(key: str) -> threading.Lock:
+    with TENANT_LOCKS_GUARD:
+        return TENANT_LOCKS.setdefault(key, threading.Lock())
+
+
+def provision_tenant(domain: str, email: str, name: str = "", groups: list[str] | None = None,
+                     description: str | None = None, key: str = "") -> dict:
+    """Create a tenant — its mail domain and its first account — in **one write**.
+
+    Called by **Cerulean**, which is where an application integrates: Cerulean has
+    already registered the tenant and minted its zone by the time this runs, and
+    this call leaves the estate with the rest — the Stalwart domain with its DKIM
+    keys, the generated DKIM/SPF/DMARC published into the Cerulean zone, the
+    delegation, one Authentik identity in the mail groups, and the matching
+    Stalwart mailbox. The caller does not hold the Stalwart recovery admin or the
+    Authentik bootstrap token, and nothing secret is written down here.
+
+    `key` is the Cerulean credential the DNS writes are made with: the caller's
+    own key when Cerulean says it may write records, otherwise empty, which means
+    the platform's own key from the vault. `authority` in the answer says which,
+    so a caller is never left guessing whose authority acted on its behalf.
+
+    It is **idempotent**, because the callers are webhooks: a retry must not leave
+    a second domain, a second mailbox, or — worse — a second password. Everything
+    is created only when absent, an existing identity has the requested groups
+    merged into it rather than replaced, and the password is minted only by the
+    call that creates the account: a later call answers `password: null` with
+    `existed: true`, which is how a caller tells a first delivery from a retry.
+    Two requests for the same domain in flight at once are serialised, so neither
+    sees a half-built tenant.
+
+    The one deliberate limit: a retry cannot hand back a password it already
+    handed out, so a caller that loses the first answer should rotate one
+    (`POST /api/service/accounts/password`) rather than re-provision.
+    """
+    ak, sw, _ = services()
+    domain = (domain or "").strip().lower().rstrip(".")
+    if not domain or "." not in domain:
+        raise RuntimeError("that is not a domain name")
+    if domain in PROTECTED_ZONES:
+        raise RuntimeError(f"refusing to provision {domain}: it is a protected zone")
+    address = (email or "").strip().lower()
+    local, _, mail_domain = address.partition("@")
+    if not local or not mail_domain:
+        raise RuntimeError("email must be localpart@domain")
+    if mail_domain != domain:
+        raise RuntimeError(f"{address} is not at {domain} — a tenant's first account "
+                           "has to live in the domain being created")
+
+    with tenant_lock(domain):
+        # "Existed" is all three records already agreeing. Checked before the
+        # writes, so it describes the state the caller's request found.
+        existed = bool(sw.domain(domain)) and bool(ak.user(address)) and bool(sw.account(address))
+        made = add_domain(domain, description, existing_ok=True, key=key)
+        account = add_user(address, name, groups or [], rotate=not existed)
+        authority = "caller's Cerulean key" if key else "platform Cerulean key"
+        log(f"provision {domain} + {address} (existed={existed}, dns via {authority})")
+        return {"tenant": {"domain": domain, "id": made.get("id")},
+                "domain": made, "account": account, "existed": existed,
+                "authority": authority, "password": account.get("password")}
+
+
 def rotate_password(email: str) -> dict:
     ak, _, _ = services()
     user = ak.user(email.strip().lower())
     if not user:
-        raise RuntimeError(f"{email}: no such user")
+        raise NotFound(f"{email}: no such user")
     password = secrets.token_urlsafe(18)
     ak.set_password(user["pk"], password)
     return {"email": email, "password": password}
@@ -958,6 +1191,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+        # A reply sent *before* the request body was read has to end the connection:
+        # HTTP/1.1 keeps it for the next request, and those unread bytes would be
+        # parsed as the next request line and logged as a bogus "Bad request syntax",
+        # which makes a clean refusal (401) read like a broken request.
+        unread_body = self.headers.get("Content-Length") or self.headers.get("Transfer-Encoding")
+        if unread_body and not getattr(self, "_body_consumed", False):
+            self.close_connection = True
 
     def json(self, code: int, obj: dict, extra: dict | None = None) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json", extra)
@@ -969,6 +1209,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(302, b"", "text/plain", {"Location": url, **(extra or {})})
 
     def body_json(self) -> dict:
+        self._body_consumed = True
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
             return {}
@@ -992,9 +1233,100 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    # ── machine surface (Cerulean) ──
+    def service_caller_allowed(self) -> bool:
+        """Second lock: only the estate's trust owner may reach this surface.
+
+        Cerulean already adjudicates every credential; this keeps the surface off
+        the internet even for a caller holding a valid key, so mail provisioning
+        is not something an application can do behind Cerulean's back.
+        """
+        peer = self.client_address[0] if self.client_address else ""
+        if peer in SERVICE_CLIENTS:
+            return True
+        log(f"service refused from {peer}: not in MAIL_SERVICE_CLIENTS")
+        self.json(403, {"error": "the machine surface is Cerulean-only"})
+        return False
+
+    def service(self, scope: str) -> dict | None:
+        """Authorise a Cerulean request, or answer for it and return None.
+
+        A Cerulean key and nothing else: no cookie, no CSRF token. Those belong to
+        the browser session, which is a different principal — an operator's session
+        must not stand in for a machine caller, and vice versa.
+        """
+        identity, status, error = service_authorize(self.headers.get("Authorization") or "", scope)
+        if identity is None:
+            log(f"service denied ({status}) {self.address_string()}: {error}")
+            self.json(status, {"error": error})
+            return None
+        return identity
+
+    def service_get(self, path: str) -> None:
+        if not self.service_caller_allowed():
+            return
+        try:
+            if path == "/api/service/state":
+                identity = self.service(READ_SCOPE)
+                if identity is None:
+                    return
+                state = list_state()
+                state["cerulean"] = {"key": identity.get("name") or "cerulean",
+                                     "scopes": identity.get("scopes") or []}
+                return self.json(200, state)
+            self.json(404, {"error": "not found"})
+        except Exception as exc:  # noqa: BLE001
+            log(f"error on GET {path}: {type(exc).__name__}: {exc}")
+            self.json(500, {"error": str(exc)[:300]})
+
+    def service_post(self, path: str) -> None:
+        """`/api/service/provision` — the one write Cerulean makes here.
+
+        Status codes follow what the caller has to decide: **201** when this call
+        created the tenant, **200** when it was already here (a retry), **400** when
+        the request is not usable, **401**/**403** for the credential, and **503**
+        when Cerulean cannot be asked — because without the trust owner there is no
+        authority to act under.
+        """
+        if not self.service_caller_allowed():
+            return
+        try:
+            if path == "/api/service/provision":
+                identity = self.service(PROVISION_SCOPE)
+                if identity is None:
+                    return
+                # Whose Cerulean authority performs the DNS writes: the caller's
+                # key when Cerulean says it may write records, otherwise the
+                # platform's own. Decided from Cerulean's answer, not guessed.
+                scopes = identity.get("scopes") or []
+                caller_key = bearer(self.headers.get("Authorization") or "")
+                key = caller_key if scope_allows(scopes, "dns:write") else ""
+                body = self.body_json()
+                result = provision_tenant(body.get("domain") or "",
+                                          body.get("email") or "",
+                                          body.get("name") or "",
+                                          body.get("groups") or [],
+                                          body.get("description"), key=key)
+                log(f"service {identity.get('name') or 'cerulean'}: tenant "
+                    f"{result['tenant']['domain']} "
+                    f"({'existed' if result['existed'] else 'created'}, "
+                    f"dns authority: {result['authority']})")
+                return self.json(200 if result["existed"] else 201, result)
+            self.json(404, {"error": "not found"})
+        except NotFound as exc:
+            self.json(404, {"error": str(exc)[:300]})
+        except (RuntimeError, ValueError) as exc:
+            log(f"error on POST {path}: {type(exc).__name__}: {exc}")
+            self.json(400, {"error": str(exc)[:300]})
+        except Exception as exc:  # noqa: BLE001
+            log(f"error on POST {path}: {type(exc).__name__}: {exc}")
+            self.json(500, {"error": str(exc)[:300]})
+
     # ── routing ──
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/service/"):
+            return self.service_get(path)
         try:
             if path == "/":
                 return self.page()
@@ -1015,6 +1347,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/service/"):
+            return self.service_post(path)
         try:
             session = self.session()
             if not session:
@@ -1026,9 +1360,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api_domains(body)
             if path == "/api/users":
                 return self.api_users(body)
+            if path == "/api/tenants":
+                return self.api_tenants(body)
             if path == "/api/users/password":
                 return self.json(200, rotate_password(body.get("email", "")))
             self.json(404, {"error": "not found"})
+        except NotFound as exc:
+            self.json(404, {"error": str(exc)[:300]})
         except Exception as exc:  # noqa: BLE001
             log(f"error on POST {path}: {type(exc).__name__}: {exc}")
             self.json(400, {"error": str(exc)[:300]})
@@ -1117,6 +1455,15 @@ class Handler(BaseHTTPRequestHandler):
         if action == "remove":
             return self.json(200, remove_user(email))
         self.json(400, {"error": "action must be add or remove"})
+
+    def api_tenants(self, body: dict):
+        """The page's version of the single write an application makes."""
+        domain = (body.get("domain") or "").strip().lower()
+        email = (body.get("email") or "").strip().lower()
+        log(f"tenant {domain} + {email}")
+        return self.json(200, provision_tenant(domain, email, body.get("name") or "",
+                                              body.get("groups") or [],
+                                              body.get("description")))
 
 
 def main() -> int:

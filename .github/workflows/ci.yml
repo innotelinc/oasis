@@ -37,6 +37,13 @@ jobs:
       - name: Validate Python
         run: python3 -m py_compile scripts/*.py
 
+      # The mail administration service and the Cerulean bridge client decide
+      # things worth keeping decided — how a tenant is built in one write, what a
+      # retry may and may not do, whose word admits a machine caller. The tests
+      # use fakes and never touch the estate, so they run here.
+      - name: Run tests
+        run: python3 -m unittest discover -s scripts/tests -v
+
       - name: Validate YAML
         run: yamllint -d relaxed .github/workflows systemd config/authentik/providers.yaml.example
 
