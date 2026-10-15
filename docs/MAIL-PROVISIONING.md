@@ -57,10 +57,13 @@ Scopes the key needs (minted in Cerulean at `POST /api/service/keys`):
 |---|---|
 | `tenants:write` (or `tenants`, `tenant`, `*`) | this endpoint |
 | `mail:provision` | the mail hop — the mail host checks the forwarded key against Cerulean |
-| `dns:write` *(optional)* | lets the caller's own key perform the DNS writes; without it the platform key does |
+| `dns:write` **and** `dns:read` (or `dns`, `*`) *(optional)* | lets the caller's own key perform the DNS writes; without both, the platform key does |
 
 `dns:write` is about *whose* authority is recorded, not about whether the work
-happens: the answer says so either way, in `authority`.
+happens: the answer says so either way, in `authority`. Both scopes are needed
+because publishing **reads** a zone before it writes it — a key that may write and
+not read would be credited as the authority while the tenant's records went
+unwritten, so it is handed the platform's key instead.
 
 ### Answer
 

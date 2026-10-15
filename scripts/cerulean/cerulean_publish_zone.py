@@ -148,6 +148,22 @@ def parse_zone(text: str, zone: str) -> list[dict]:
     return records
 
 
+def placement(rec: dict, present: set) -> str:
+    """How this record relates to the live zone, given what the zone already has.
+
+    `classify` names the records an operator owns — apex MX, SPF and DMARC, and
+    the CAA issue grant. That ownership protects a record that is *there*: a live
+    MX is the operator's routing choice and is never overwritten. A zone with no
+    MX at all has nothing to protect, and refusing to write one leaves the domain
+    unable to receive mail — which is the whole point of a tenant whose zone
+    Cerulean just minted. So an "override" only defers when a value is present.
+    """
+    kind = classify(rec)
+    if kind == "override" and not present:
+        return "add"
+    return kind
+
+
 def classify(rec: dict) -> str:
     """How this record relates to the live zone: add / singleton / override."""
     rtype, value = rec["type"], rec["value"]
@@ -186,8 +202,9 @@ def publish(domain: str, zone: str, text: str, dns_mode: str, args,
 
     added = exact = override = conflict = failed = 0
     for rec in parsed:
-        key, kind = (rec["name"], rec["type"]), classify(rec)
+        key = (rec["name"], rec["type"])
         present = have_values.get(key, set())
+        kind = placement(rec, present)
         if rec["value"] in present:
             exact += 1
             continue

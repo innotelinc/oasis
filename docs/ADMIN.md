@@ -26,10 +26,12 @@ and mints. Adding a domain does both — it creates the Stalwart domain, has
 Cerulean mint the zone, delegates the name, and publishes the generated
 DKIM/SPF/DMARC into it — so a new domain is one click, not a recipe. Removing a
 domain takes all of it back: the mailbox domain, the zone, its records, and the
-delegation. Only two things stay outside the service, because they are not DNS
-writes at all: the **MX record** (the publisher never writes MX, since mail
-routing is the operator's choice) and, for a brand-new apex, the **registrar**
-step that points the domain at the estate nameservers.
+delegation. Only one thing stays outside the service, because it is not a DNS
+write at all: for a brand-new apex, the **registrar** step that points the domain
+at the estate nameservers. The **MX** is the operator's routing choice and an MX
+already in the zone is never overwritten — but a zone that has none (the zone
+Cerulean just minted for a tenant) gets Stalwart's, so the domain can receive the
+mail it was built for.
 
 ## Sign-in
 
@@ -74,7 +76,10 @@ publisher is deliberately off. So:
   (or whose zone was never created). It is idempotent — a zone Cerulean already
   serves comes back as *already present* rather than an error.
 - **Publish DNS** then writes the domain's generated DKIM/SPF/DMARC (and
-  SRV/MTA-STS/TLS-RPT/autoconfig) records into that zone through Cerulean.
+  SRV/MTA-STS/TLS-RPT/autoconfig) records into that zone through Cerulean. The
+  SPF it writes also names the estate's outbound relay (`SPF_RELAY_INCLUDE`,
+  default `spf.mailjet.com`), because this host hands mail to a smarthost rather
+  than sending it itself; an SPF the zone already has is left alone.
 - Removing a domain unregisters the zone again (`DELETE /api/service/domains`),
   which drops the zone and every record in it, and removes the delegation the
   page had written into the parent. Cerulean refuses its own platform zones, and
@@ -98,7 +103,9 @@ Publish is still guarded: if the resolver does not serve the zone, nothing is
 written — the service checks that the records the resolver returns actually
 belong to the zone before writing, so it never mints a private zone DNS would not
 delegate to. With zone creation wired in, that branch is only reached when
-Cerulean itself could not create the zone.
+Cerulean itself could not create the zone. A read that Cerulean *refuses* (a key
+without `dns:read`, say) is reported as that refusal, not as a zone that is
+missing.
 
 ## Provisioning tenants from another platform
 

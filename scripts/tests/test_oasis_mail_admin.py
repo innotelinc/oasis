@@ -130,7 +130,8 @@ class FakeStalwart:
                 del self.accounts_by_email[email]
 
 
-def fake_cerulean(whoami=None, domains=None, whoami_raises=None, domains_raises=None):
+def fake_cerulean(whoami=None, domains=None, whoami_raises=None, domains_raises=None,
+                  records=None, records_raises=None):
     """A stand-in for the bridge client module, so nothing leaves the process.
 
     A refusal is described as `(kind, message)` rather than as an exception
@@ -138,6 +139,7 @@ def fake_cerulean(whoami=None, domains=None, whoami_raises=None, domains_raises=
     before this call returns.
     """
     module = types.ModuleType("cerulean")
+    writes: list = []
 
     class CeruleanError(RuntimeError):
         pass
@@ -166,6 +168,16 @@ def fake_cerulean(whoami=None, domains=None, whoami_raises=None, domains_raises=
                 refuse(domains_raises)
             return domains if domains is not None else []
 
+        def records(self, zone):
+            if records_raises:
+                refuse(records_raises)
+            return records if records is not None else []
+
+        def add_record(self, zone, rtype, name, value, ttl=3600, priority=None):
+            writes.append({"zone": zone, "type": rtype, "name": name, "value": value})
+            return {"ok": True}
+
+    Cerulean.writes = writes
     module.Cerulean = Cerulean
     module.CeruleanError = CeruleanError
     return module, CeruleanError
@@ -301,6 +313,141 @@ class DomainTest(unittest.TestCase):
             mail_admin.remove_user("nobody@innotel.us")
 
 
+class PublishTest(unittest.TestCase):
+    """A publish that wrote nothing has to say which fault it hit."""
+
+    def setUp(self):
+        self.sw = FakeStalwart()
+        record = self.sw.create_domain("acme.innotel.us", "")
+        record["dnsZoneFile"] = (
+            "acme.innotel.us. 3600 IN MX 10 mail.innotel.us.\n"
+            "acme.innotel.us. 3600 IN TXT \"v=spf1 mx -all\"\n"
+            "_dmarc.acme.innotel.us. 3600 IN TXT \"v=DMARC1; p=reject\"\n"
+        )
+        mail_admin.STATE.update(authentik=FakeAuthentik(), stalwart=self.sw, oidc=object())
+        self.original_services = mail_admin.services
+        self.original_client = mail_admin.cerulean_client
+        mail_admin.services = lambda: (None, self.sw, None)
+
+    def tearDown(self):
+        mail_admin.services = self.original_services
+        mail_admin.cerulean_client = self.original_client
+        mail_admin.STATE.update(authentik=None, stalwart=None, oidc=None)
+
+    def publish(self, key="", **fake):
+        module, _ = fake_cerulean(**fake)
+        self.writes = module.Cerulean.writes
+        sys.modules["cerulean"] = module
+        mail_admin.cerulean_client = lambda k="": module.Cerulean(k or None)
+        try:
+            return mail_admin.publish_dns("acme.innotel.us", key=key)
+        finally:
+            del sys.modules["cerulean"]
+
+    def test_a_refused_zone_read_is_not_reported_as_a_missing_zone(self):
+        """The live failure this was written for: a key scoped `dns:write` alone.
+
+        The publish reads the zone to stay idempotent, Cerulean refused the read,
+        and the operator was told the resolver does not serve the zone — sending
+        them to create a zone that already existed. A refusal is reported as one.
+        """
+        result = self.publish(
+            key="ceru_write_only",
+            records_raises=("http", "GET /service/dns/records: HTTP 403 "
+                                    "Insufficient scope — requires: dns, dns:read, domains, *"))
+        self.assertIn("could not be asked", result["skipped"])
+        self.assertIn("Insufficient scope", result["skipped"])
+        self.assertNotIn("does not serve", result["skipped"])
+
+    def test_a_zone_the_resolver_does_not_serve_still_says_so(self):
+        """A read that succeeds outside this zone means the zone is not there."""
+        result = self.publish(
+            records=[{"name": "innotel.us", "type": "MX", "value": "mail.innotel.us"}])
+        self.assertIn("does not serve", result["skipped"])
+
+    def test_a_freshly_minted_zone_gets_the_apex_records_mail_needs(self):
+        """The zone Cerulean minted for a tenant holds NS and SOA and nothing else.
+
+        Deferring to an operator's MX there would defer to a record that does not
+        exist, leaving the tenant unable to receive mail — the one thing the write
+        was for. Stalwart's own MX/SPF/DMARC are therefore written.
+        """
+        result = self.publish(records=[{"name": "acme.innotel.us", "type": "NS",
+                                       "value": "ns1.innotel.us"}])
+        written = {(w["name"], w["type"]) for w in self.writes}
+        self.assertIn(("acme.innotel.us", "MX"), written)
+        self.assertIn(("acme.innotel.us", "TXT"), written)
+        self.assertIn(("_dmarc.acme.innotel.us", "TXT"), written)
+        self.assertEqual(0, result["override"])
+        self.assertEqual(0, result["failed"])
+
+    def test_a_new_zone_gets_a_relay_aware_spf(self):
+        """Outbound leaves through the relay, so the tenant's SPF has to name it.
+
+        Stalwart renders `v=spf1 mx -all`, which authorises this host and not the
+        smarthost it actually hands mail to; the recipient would fail SPF. The
+        include is added to the record the publish writes.
+        """
+        self.publish(records=[{"name": "acme.innotel.us", "type": "NS",
+                                       "value": "ns1.innotel.us"}])
+        spf = [w["value"] for w in self.writes
+               if w["name"] == "acme.innotel.us" and w["type"] == "TXT"]
+        self.assertEqual(["v=spf1 include:spf.mailjet.com mx -all"], spf)
+
+    def test_the_relay_include_is_configurable_and_can_be_off(self):
+        fresh = [{"name": "acme.innotel.us", "type": "NS", "value": "ns1.innotel.us"}]
+        original = os.environ.get("SPF_RELAY_INCLUDE")
+        try:
+            os.environ["SPF_RELAY_INCLUDE"] = "spf.example.net"
+            self.publish(records=fresh)
+            named = [w["value"] for w in self.writes
+                     if w["name"] == "acme.innotel.us" and w["type"] == "TXT"]
+            self.assertEqual(["v=spf1 include:spf.example.net mx -all"], named)
+
+            self.writes.clear()
+            os.environ["SPF_RELAY_INCLUDE"] = ""
+            self.publish(records=fresh)
+            untouched = [w["value"] for w in self.writes
+                         if w["name"] == "acme.innotel.us" and w["type"] == "TXT"]
+            self.assertEqual(["v=spf1 mx -all"], untouched)
+        finally:
+            if original is None:
+                del os.environ["SPF_RELAY_INCLUDE"]
+            else:
+                os.environ["SPF_RELAY_INCLUDE"] = original
+
+    def test_an_operators_spf_is_never_made_relay_aware_under_them(self):
+        """The relay include is for a record *this* publish writes, not a live one."""
+        result = self.publish(records=[
+            {"name": "acme.innotel.us", "type": "NS", "value": "ns1.innotel.us"},
+            {"name": "acme.innotel.us", "type": "TXT",
+             "value": "v=spf1 include:another-relay.example -all"},
+        ])
+        written = {(w["name"], w["type"]) for w in self.writes}
+        self.assertNotIn(("acme.innotel.us", "TXT"), written)
+        self.assertEqual(1, result["override"])
+
+    def test_an_operators_own_apex_record_is_kept(self):
+        """The protection the override was for: a live MX is the operator's choice."""
+        result = self.publish(records=[
+            {"name": "acme.innotel.us", "type": "NS", "value": "ns1.innotel.us"},
+            {"name": "acme.innotel.us", "type": "MX",
+             "value": "10 router.example.net"},
+        ])
+        written = {(w["name"], w["type"]) for w in self.writes}
+        self.assertNotIn(("acme.innotel.us", "MX"), written)
+        self.assertEqual(1, result["override"])
+
+    def test_a_record_already_matching_is_not_rewritten(self):
+        result = self.publish(records=[
+            {"name": "acme.innotel.us", "type": "NS", "value": "ns1.innotel.us"},
+            {"name": "acme.innotel.us", "type": "MX", "value": "10 mail.innotel.us"},
+        ])
+        written = {(w["name"], w["type"]) for w in self.writes}
+        self.assertNotIn(("acme.innotel.us", "MX"), written)
+        self.assertGreaterEqual(result["exact"], 1)
+
+
 class ServiceScopeTest(unittest.TestCase):
     """Cerulean's answer decides; this service keeps no list of its own."""
 
@@ -317,6 +464,26 @@ class ServiceScopeTest(unittest.TestCase):
         self.assertFalse(mail_admin.scope_allows([], "mail:provision"))
         self.assertFalse(mail_admin.scope_allows(["dns:write"], "mail:provision"))
         self.assertTrue(mail_admin.scope_allows(["dns:write"], "dns:write"))
+        # Bare prefixes are the bridge's own spelling: `dns` covers `dns:read`.
+        self.assertTrue(mail_admin.scope_allows(["dns"], "dns:read"))
+        self.assertTrue(mail_admin.scope_allows(["tenants"], "tenants:write"))
+
+    def test_the_callers_key_publishes_only_when_it_can_read_and_write(self):
+        """Publishing reads a zone before it writes it, so `dns:write` alone is not
+        enough to act under the caller's authority. A key that may not read is
+        handed the platform's own, and the answer says so.
+        """
+        self.assertEqual("ceru_abc_def",
+                         mail_admin.dns_authority_key(["dns:write", "dns:read"],
+                                                      "ceru_abc_def"))
+        self.assertEqual("ceru_abc_def",
+                         mail_admin.dns_authority_key(["dns"], "ceru_abc_def"))
+        self.assertEqual("ceru_abc_def",
+                         mail_admin.dns_authority_key(["*"], "ceru_abc_def"))
+        self.assertEqual("",
+                         mail_admin.dns_authority_key(["dns:write"], "ceru_abc_def"))
+        self.assertEqual("",
+                         mail_admin.dns_authority_key(["mail:provision"], "ceru_abc_def"))
 
     def test_no_credential_is_unauthorised(self):
         identity, status, _ = mail_admin.service_authorize("", "mail:provision")

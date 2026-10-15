@@ -160,15 +160,33 @@ def bearer(header: str) -> str:
     return value[7:].strip() if value.lower().startswith("bearer ") else ""
 
 
+def dns_authority_key(scopes: list, caller_key: str) -> str:
+    """Which Cerulean credential publishes a tenant's records.
+
+    The caller's own key is used only when Cerulean says it may do the whole DNS
+    job: publishing reads a zone before it writes it, so a key that may write and
+    not read would leave the tenant's records unwritten while the answer named
+    the caller as the authority. Anything less falls back to the platform's own
+    key — decided from Cerulean's scopes, never guessed — and `authority` in the
+    answer says which credential acted.
+    """
+    if scope_allows(scopes, "dns:write") and scope_allows(scopes, "dns:read"):
+        return caller_key
+    return ""
+
+
 def scope_allows(scopes: list, scope: str) -> bool:
     """Whether a Cerulean key carrying `scopes` covers `scope` (`mail:provision`).
 
-    `mail:*` covers every mail scope and `*` covers everything, matching the
-    Cerulean bridge's own prefix sugar, so a scope is spelled once — there.
+    The spelling rules are the bridge's own, mirrored exactly: `*` covers
+    everything, `mail:*` covers every mail scope, and a bare prefix (`mail`,
+    `dns`) covers the scopes underneath it. A key Cerulean would admit for a route
+    must not be refused here, or the estate's own answer would only be half-read.
     """
     have = {str(s).strip().lower() for s in scopes or []}
     want = scope.lower()
-    return "*" in have or want in have or f"{want.split(':')[0]}:*" in have
+    prefix = want.split(":")[0]
+    return "*" in have or want in have or f"{prefix}:*" in have or prefix in have
 
 
 def bridge_has_no_whoami(message: str) -> bool:
@@ -804,12 +822,40 @@ def publish_dns(name: str, key: str = "") -> dict:
     client = cerulean_client(key)
     try:
         live_rows = client.records(name)
-    except CeruleanError:
-        live_rows = []
+    except CeruleanError as exc:
+        # A refused read is not a missing zone. Reporting "the resolver does not
+        # serve this zone" sends an operator off to create a zone that already
+        # exists, when the fault is this key's scopes: publishing *reads* the zone
+        # before it writes it, so a key scoped `dns:write` alone cannot do it.
+        return {"domain": name,
+                "skipped": f"Cerulean could not be asked for the zone: {exc}"}
 
     def belongs(record_name) -> bool:
         n = str(record_name or "").lower().rstrip(".")
         return n == name or n.endswith("." + name)
+
+    # This host does not send to the internet itself: the ISP blocks port 25, so
+    # Stalwart's outbound route hands mail to the relay (`mailjet`) and the estate
+    # SPF names that include. Stalwart renders a domain's own apex SPF as
+    # `v=spf1 mx -all`, which authorises this host and *not* the relay — so a
+    # tenant provisioned from that template would fail SPF at the recipient. The
+    # include is therefore added when the record is first written; a zone that
+    # already has an SPF keeps it (an operator's record is never rewritten), and
+    # an empty SPF_RELAY_INCLUDE turns the rewrite off.
+    # Set and empty means off, the way this service spells "disabled" everywhere
+    # else (MAIL_SERVICE_CLIENTS, MAIL_PROVISION_URL): unset takes the estate's
+    # relay, a value names a different one, and "" leaves Stalwart's record alone.
+    relay = os.environ.get("SPF_RELAY_INCLUDE", "spf.mailjet.com").strip()
+
+    def relay_aware(record: dict) -> dict:
+        """Name the relay in a rendered SPF, so outbound mail authorises it."""
+        value = str(record.get("value") or "")
+        if not relay or record.get("type") != "TXT" or not value.lower().startswith("v=spf1"):
+            return record
+        terms = value.split()
+        if any(relay in term for term in terms[1:]):
+            return record
+        return {**record, "value": " ".join([terms[0], f"include:{relay}", *terms[1:]])}
 
     # The bridge ignores the ?zone= filter on read and answers with the zone it
     # does serve, so an unserved domain looks like it has records. Only publish
@@ -831,11 +877,16 @@ def publish_dns(name: str, key: str = "") -> dict:
     for rec in cz.parse_zone(text, name):
         key = (rec["name"], rec["type"])
         present = live.get(key, set())
+        rec = relay_aware(rec)
         if rec["value"] in present:
             exact += 1
             continue
-        kind = cz.classify(rec)
-        if kind == "override":          # estate-owned: apex SPF/DMARC/MX and CAA issue
+        # An operator-owned record (apex SPF/DMARC/MX, the CAA issue grant) is kept
+        # — but only a record that is actually there. A tenant whose zone Cerulean
+        # just minted has no MX at all, and deferring to a record that does not
+        # exist would leave the domain unable to receive the mail it was built for.
+        kind = cz.placement(rec, present)
+        if kind == "override":
             override += 1
             continue
         if kind == "singleton" and present:
@@ -1296,11 +1347,12 @@ class Handler(BaseHTTPRequestHandler):
                 if identity is None:
                     return
                 # Whose Cerulean authority performs the DNS writes: the caller's
-                # key when Cerulean says it may write records, otherwise the
-                # platform's own. Decided from Cerulean's answer, not guessed.
+                # key when Cerulean says it may read *and* write records,
+                # otherwise the platform's own. Decided from Cerulean's answer,
+                # not guessed.
                 scopes = identity.get("scopes") or []
                 caller_key = bearer(self.headers.get("Authorization") or "")
-                key = caller_key if scope_allows(scopes, "dns:write") else ""
+                key = dns_authority_key(scopes, caller_key)
                 body = self.body_json()
                 result = provision_tenant(body.get("domain") or "",
                                           body.get("email") or "",
