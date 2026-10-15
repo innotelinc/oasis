@@ -497,6 +497,18 @@ class PublishTest(unittest.TestCase):
         self.assertGreaterEqual(result["exact"], 1)
 
 
+class PageTest(unittest.TestCase):
+    """The console has to reach the one write, not only the machine surface."""
+
+    def test_the_page_carries_the_tenant_form_and_posts_to_the_tenant_route(self):
+        self.assertIn('id="tenantForm"', mail_admin.PAGE)
+        self.assertIn("/api/tenants", mail_admin.PAGE)
+
+    def test_the_page_still_carries_the_domain_and_user_forms(self):
+        for marker in ('id="domainForm"', 'id="userForm"'):
+            self.assertIn(marker, mail_admin.PAGE)
+
+
 class ServiceScopeTest(unittest.TestCase):
     """Cerulean's answer decides; this service keeps no list of its own."""
 

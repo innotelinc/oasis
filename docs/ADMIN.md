@@ -54,9 +54,16 @@ environment; sessions are HMAC-signed cookies with a CSRF token on every write.
 | `GET /auth/login`, `GET /auth/callback` | the OIDC flow |
 | `GET /auth/logout` | clear the session |
 | `GET /api/state` | JSON: domains and users |
+| `POST /api/tenants` | `{domain, email, name?}` — the one write, from the console |
 | `POST /api/domains` | `{action: add\|remove\|zone\|publish, name, description?}` |
 | `POST /api/users` | `{action: add\|remove, email, name?, groups?}` |
 | `POST /api/users/password` | `{email}` — rotate the Authentik password (returned once) |
+
+**Add tenant** is the same single write an application makes through Cerulean
+(`POST /api/service/tenants`), run here for a person who is signed in — the domain
+with its zone and delegation, the identity and the first mailbox, in one request.
+The DNS writes are made with the platform's Cerulean key, because a browser
+session is not a machine caller.
 
 Adding a user generates a password and returns it once; adding a domain returns
 what it did (zone, delegation, records) and the few follow-ups that are not DNS

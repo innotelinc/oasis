@@ -33,6 +33,7 @@ Authentik's own group records rather than trusted from a token claim
     GET  /auth/callback         finish it
     GET  /auth/logout           clear the session
     GET  /api/state             JSON: domains and users
+    POST /api/tenants           {domain, email, name?, groups?, description?}
     POST /api/domains           {action: add|remove, name, description?}
     POST /api/users             {action: add|remove, email, name?, groups?}
     POST /api/users/password    {email}   rotate the Authentik password (returned once)
@@ -1157,6 +1158,21 @@ domain takes its zone and records with it.</div></section>
 <button type="submit">Add user</button></form>
 <div class="small">A user is created in Authentik (with the groups below) and as a
 Stalwart mailbox. The generated password is shown once.</div></section>
+<section><h2>Tenant</h2>
+<div class="small">The one write an application makes, from the console: the domain
+with its zone, an identity, and the first mailbox, in a single call. <b>Add
+domain</b> then <b>Add user</b> above is the same work in two steps, for a domain
+that already exists.</div>
+<form id="tenantForm">
+<input type="text" name="domain" placeholder="example.com" required>
+<input type="email" name="email" placeholder="ops@example.com" required>
+<input type="text" name="name" placeholder="Acme Ops">
+<button type="submit">Add tenant</button></form>
+<div class="small">Creates the mail domain with its DKIM keys, mints and delegates
+its zone through <b>Cerulean</b>, publishes its DKIM/SPF/DMARC, creates the
+Authentik identity and the Stalwart mailbox, and shows the password once. The
+first address has to be at the domain, and the DNS writes are made with the
+platform's Cerulean key because a browser session is not a machine caller.</div></section>
 <div id="toast"></div>
 </main>
 <script>
@@ -1235,6 +1251,14 @@ document.getElementById('userForm').onsubmit=async e=>{e.preventDefault();
   try{const r=await api('/api/users',{action:'add',email:f.get('email'),name:f.get('name'),
     groups:(f.get('groups')||'').split(',').map(s=>s.trim()).filter(Boolean)},'POST');
     toast('Added '+r.email+'\\nPassword (shown once): '+r.password,'ok');
+    e.target.reset();load()}catch(err){toast(err.message,'bad')}};
+document.getElementById('tenantForm').onsubmit=async e=>{e.preventDefault();
+  const f=new FormData(e.target);
+  try{const r=await api('/api/tenants',{domain:f.get('domain'),email:f.get('email'),
+    name:f.get('name')||null},'POST');
+    toast('Tenant '+r.tenant.domain+'\\nmailbox: '+r.account.email+
+      '\\nauthority: '+r.authority+(r.existed?'\\n(already here — no new password)':
+      '\\nPassword (shown once): '+r.password),'ok');
     e.target.reset();load()}catch(err){toast(err.message,'bad')}};
 load().catch(e=>toast(e.message,'bad'));
 </script></body></html>"""
