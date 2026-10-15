@@ -38,6 +38,13 @@ Authentik's own group records rather than trusted from a token claim
     POST /api/users             {action: add|remove, email, name?, groups?}
     POST /api/users/password    {email}   rotate the Authentik password (returned once)
 
+# The machine surface — Cerulean only, `Authorization: Bearer ceru_…`, and
+# verified with Cerulean on every call. These are the calls an application
+# reaches through the bridge, never directly:
+    GET  /api/service/state                   JSON: domains and users
+    POST /api/service/provision                {domain, email, name?, groups?, description?}
+    POST /api/service/deprovision              {domain, email?, removeDomain?}
+
 Reads the Stalwart recovery admin from /etc/stalwart/stalwart.env and the
 Authentik admin token from Cerulean Vault (`/etc/oasis/vault-token`); the OIDC
 client secret is fetched from Authentik at runtime rather than stored. Nothing
@@ -130,6 +137,11 @@ SERVICE_CLIENTS = {c.strip() for c in os.environ.get(
 # What Cerulean must say the caller's key is scoped for. Both are Cerulean's
 # vocabulary, not this service's: this service only asks Cerulean the question.
 PROVISION_SCOPE = os.environ.get("PROVISION_SCOPE", "mail:provision")
+# Removing takes the same scope as making: a key trusted to create a tenant
+# is trusted to remove the one it made, and requiring a second scope would
+# mean re-keying every caller for the rarer operation. Split it here and in
+# Cerulean's vocabulary when a caller should be able to add but not remove.
+DEPROVISION_SCOPE = os.environ.get("DEPROVISION_SCOPE", PROVISION_SCOPE)
 READ_SCOPE = os.environ.get("READ_SCOPE", "mail:read")
 
 
@@ -1088,6 +1100,77 @@ def provision_tenant(domain: str, email: str, name: str = "", groups: list[str] 
                 "authority": authority, "password": account.get("password")}
 
 
+def deprovision_tenant(domain: str, email: str = "", also_domain: bool = False) -> dict:
+    """Remove what `provision_tenant` made — one account, or the whole tenant.
+
+    Called by **Cerulean**, on the caller's own authority, exactly as provisioning
+    is. Two things it will not do, because neither is recoverable:
+
+    * A **protected zone** is never touched: the estate's own mail lives there.
+    * A **mail domain** is only removed once nothing else lives on it. A domain
+      with other mailboxes is somebody's working mail, and tearing it down because
+      one tenant of it went away would delete their post with it. The refusal
+      names what is still there, so the caller can decide rather than guess.
+
+    Idempotent, like provisioning: something already gone reports
+    ``removed: False`` instead of failing, so a retried webhook is safe. Removing
+    the domain takes its zone with it (`remove_domain` does that), which is what
+    makes this the counterpart of registering one.
+
+    `also_domain` is the caller's ``removeDomain`` — the mail half is only half
+    the tenant, so the caller says explicitly whether the domain goes too.
+    """
+    _, sw, _ = services()
+    domain = (domain or "").strip().lower().rstrip(".")
+    if not domain or "." not in domain:
+        raise RuntimeError("that is not a domain name")
+    if domain in PROTECTED_ZONES:
+        raise RuntimeError(f"refusing to touch {domain}: it is a protected zone")
+
+    address = (email or "").strip().lower()
+    if address:
+        local, _, mail_domain = address.partition("@")
+        if not local or mail_domain != domain:
+            raise RuntimeError(f"{address} is not an address at {domain}")
+    if not address and not also_domain:
+        raise RuntimeError("nothing to do: pass an email, removeDomain, or both")
+
+    result: dict = {"domain": domain, "account": None, "domainRemoved": None}
+
+    with tenant_lock(domain):
+        # Checked before anything is removed, so a refusal leaves the tenant whole
+        # rather than half-torn-down.
+        if also_domain:
+            others = sorted({
+                (a.get("emailAddress") or "").lower()
+                for a in sw.accounts()
+                if (a.get("emailAddress") or "").lower().endswith("@" + domain)
+                and (a.get("emailAddress") or "").lower() != address
+            } - {""})
+            if others:
+                raise RuntimeError(
+                    f"refusing to remove {domain}: {len(others)} other account(s) still "
+                    f"live on it ({', '.join(others[:5])}) — remove those first, or "
+                    "leave the domain in place")
+
+        if address:
+            try:
+                removed = remove_user(address)
+                result["account"] = {**removed, "removed": True}
+            except NotFound:
+                result["account"] = {"email": address, "removed": False,
+                                     "detail": "no such mailbox"}
+
+        if also_domain:
+            try:
+                removed = remove_domain(domain)
+                result["domainRemoved"] = {**removed, "removed": True}
+            except NotFound:
+                result["domainRemoved"] = {"domain": domain, "removed": False,
+                                           "detail": "no such mail domain"}
+    return result
+
+
 def rotate_password(email: str) -> dict:
     ak, _, _ = services()
     user = ak.user(email.strip().lower())
@@ -1375,7 +1458,8 @@ class Handler(BaseHTTPRequestHandler):
             self.json(500, {"error": str(exc)[:300]})
 
     def service_post(self, path: str) -> None:
-        """`/api/service/provision` — the one write Cerulean makes here.
+        """`/api/service/provision` and `/api/service/deprovision` — the two writes
+        Cerulean makes here, on the caller's own forwarded key.
 
         Status codes follow what the caller has to decide: **201** when this call
         created the tenant, **200** when it was already here (a retry), **400** when
@@ -1408,6 +1492,23 @@ class Handler(BaseHTTPRequestHandler):
                     f"({'existed' if result['existed'] else 'created'}, "
                     f"dns authority: {result['authority']})")
                 return self.json(200 if result["existed"] else 201, result)
+            if path == "/api/service/deprovision":
+                identity = self.service(DEPROVISION_SCOPE)
+                if identity is None:
+                    return
+                body = self.body_json()
+                result = deprovision_tenant(body.get("domain") or "",
+                                            body.get("email") or "",
+                                            bool(body.get("removeDomain")))
+                account = result.get("account") or {}
+                domain_removed = result.get("domainRemoved") or {}
+                log(f"service {identity.get('name') or 'cerulean'}: deprovision "
+                    f"{result['domain']} (account: "
+                    f"{'removed' if account.get('removed') else 'none'}, domain: "
+                    f"{'removed' if domain_removed.get('removed') else 'kept'})")
+                # Always 200: removal is idempotent, and a tenant that was not
+                # there is a tenant already gone, not an error.
+                return self.json(200, result)
             self.json(404, {"error": "not found"})
         except NotFound as exc:
             self.json(404, {"error": str(exc)[:300]})

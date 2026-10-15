@@ -344,6 +344,142 @@ class DomainTest(unittest.TestCase):
         self.assertEqual("postmaster", self.ak.user("postmaster@denovocredit.com")["username"])
 
 
+class TeardownTest(unittest.TestCase):
+    """A provision has to be reversible, and only as far as it was asked to go.
+
+    Removing a mailbox is one write; removing the *tenant* is the one that takes
+    the mail domain and hands the zone back. What is judged here is that the
+    destructive half happens only when it is asked for, that it is refused while
+    other people's mail still lives on the domain, and that a retry reports a
+    tenant already gone rather than failing.
+    """
+
+    def setUp(self):
+        self.ak, self.sw = FakeAuthentik(), FakeStalwart()
+        mail_admin.STATE.update(authentik=self.ak, stalwart=self.sw, oidc=object())
+        self.zones_deleted = []
+        self.original = (mail_admin.create_zone, mail_admin.publish_dns, mail_admin.delete_zone)
+        mail_admin.create_zone = lambda name, key="": {"domain": name, "created": True}
+        mail_admin.publish_dns = lambda name, key="": {"domain": name, "added": 3}
+
+        def delete_zone(name):
+            self.zones_deleted.append(name)
+            return {"domain": name, "deleted": True}
+
+        mail_admin.delete_zone = delete_zone
+
+    def tearDown(self):
+        (mail_admin.create_zone, mail_admin.publish_dns,
+         mail_admin.delete_zone) = self.original
+        mail_admin.STATE.update(authentik=None, stalwart=None, oidc=None)
+
+    def tenant(self, domain="acme.innotel.us"):
+        return mail_admin.provision_tenant(domain, f"jane@{domain}", name="Jane",
+                                           groups=["paid_users"])
+
+    def teardown(self, domain="acme.innotel.us", **kw):
+        return mail_admin.deprovision_tenant(domain, **kw)
+
+    def test_a_mailbox_goes_without_taking_the_domain_or_its_zone_with_it(self):
+        self.tenant()
+        result = self.teardown(email="jane@acme.innotel.us")
+        self.assertTrue(result["account"]["removed"])
+        self.assertIsNone(self.sw.account("jane@acme.innotel.us"))
+        # The domain is the tenant's, not the mailbox's: one account leaving is not
+        # a reason to stop answering for the name.
+        self.assertTrue(self.sw.domain("acme.innotel.us"))
+        self.assertIsNone(result["domainRemoved"])
+        self.assertEqual([], self.zones_deleted)
+
+    def test_the_sign_in_is_revoked_rather_than_the_identity_deleted(self):
+        """The estate keeps the identity for audit, and the answer says which half ran.
+
+        An identity is removed by deactivating it — sign-in stops, the record stays —
+        so a teardown that reported "deleted" would be describing something the estate
+        did not do.
+        """
+        self.tenant()
+        result = self.teardown(email="jane@acme.innotel.us")
+        self.assertFalse(self.ak.user("jane@acme.innotel.us")["is_active"])
+        self.assertEqual("deactivated (sign-in revoked)", result["account"]["authentik"])
+        self.assertEqual("destroyed", result["account"]["mailbox"])
+
+    def test_removing_the_tenant_takes_the_domain_and_hands_back_the_zone(self):
+        self.tenant()
+        result = self.teardown(email="jane@acme.innotel.us", also_domain=True)
+        self.assertIsNone(self.sw.domain("acme.innotel.us"))
+        self.assertTrue(result["domainRemoved"]["removed"])
+        self.assertEqual(["acme.innotel.us"], self.zones_deleted)
+
+    def test_a_domain_that_still_carries_other_mail_is_not_removed(self):
+        """Somebody's working mail is not collateral of one tenant of it going away."""
+        self.tenant()
+        mail_admin.provision_tenant("acme.innotel.us", "sam@acme.innotel.us", name="Sam")
+        with self.assertRaises(RuntimeError) as caught:
+            self.teardown(email="jane@acme.innotel.us", also_domain=True)
+        self.assertIn("still live on it", str(caught.exception))
+        self.assertIn("sam@acme.innotel.us", str(caught.exception))
+        # Checked before anything is removed, so a refusal leaves the tenant whole
+        # rather than half-torn-down.
+        self.assertTrue(self.sw.domain("acme.innotel.us"))
+        self.assertTrue(self.sw.account("jane@acme.innotel.us"))
+        self.assertTrue(self.sw.account("sam@acme.innotel.us"))
+        self.assertTrue(self.ak.user("jane@acme.innotel.us")["is_active"])
+        self.assertEqual([], self.zones_deleted)
+
+    def test_a_protected_zone_is_refused_before_anything_is_touched(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.teardown(domain="innotel.us", email="ops@innotel.us", also_domain=True)
+        self.assertIn("protected zone", str(caught.exception))
+        self.assertEqual([], self.sw.destroyed_accounts)
+        self.assertEqual([], self.zones_deleted)
+
+    def test_only_the_mailbox_asked_for_is_removed(self):
+        self.tenant()
+        mail_admin.provision_tenant("acme.innotel.us", "sam@acme.innotel.us", name="Sam")
+        self.teardown(email="jane@acme.innotel.us")
+        self.assertIsNone(self.sw.account("jane@acme.innotel.us"))
+        self.assertTrue(self.sw.account("sam@acme.innotel.us"))
+
+    def test_a_call_that_asks_for_nothing_is_a_mistake_not_a_teardown(self):
+        self.tenant()
+        with self.assertRaises(RuntimeError) as caught:
+            self.teardown()
+        self.assertIn("nothing to do", str(caught.exception))
+        self.assertTrue(self.sw.account("jane@acme.innotel.us"))
+
+    def test_an_address_at_another_domain_is_refused(self):
+        with self.assertRaises(RuntimeError):
+            self.teardown(email="jane@other.innotel.us")
+
+    def test_a_domain_that_is_not_a_domain_is_refused(self):
+        for domain in ("", "localhost"):
+            with self.assertRaises(RuntimeError):
+                self.teardown(domain=domain, also_domain=True)
+        self.assertEqual([], self.zones_deleted)
+
+    def test_a_tenant_already_gone_is_reported_gone_rather_than_failing(self):
+        """A retried webhook must not read as a failure the second time."""
+        result = self.teardown(email="jane@acme.innotel.us", also_domain=True)
+        self.assertFalse(result["account"]["removed"])
+        self.assertEqual("no such mailbox", result["account"]["detail"])
+        self.assertFalse(result["domainRemoved"]["removed"])
+        self.assertEqual("no such mail domain", result["domainRemoved"]["detail"])
+        self.assertEqual([], self.zones_deleted)
+
+    def test_removal_is_admitted_by_the_same_scope_that_made_the_tenant(self):
+        """One scope for the pair, split by setting DEPROVISION_SCOPE.
+
+        A key trusted to create a tenant is trusted to remove the one it made;
+        requiring a second scope would mean re-keying every caller for the rarer
+        operation.
+        """
+        self.assertEqual(os.environ.get("DEPROVISION_SCOPE", mail_admin.PROVISION_SCOPE),
+                         mail_admin.DEPROVISION_SCOPE)
+        self.assertTrue(mail_admin.scope_allows([mail_admin.DEPROVISION_SCOPE],
+                                                mail_admin.DEPROVISION_SCOPE))
+
+
 class SignInNameTest(unittest.TestCase):
     """The name an identity gets when its mailbox localpart is already taken."""
 
