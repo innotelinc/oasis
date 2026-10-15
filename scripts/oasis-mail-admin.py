@@ -626,6 +626,25 @@ def list_state() -> dict:
             "mailDomains": [d["name"] for d in domains]}
 
 
+def sign_in_name(email: str, taken: set) -> str:
+    """A sign-in name no other identity already holds.
+
+    A mailbox's localpart is unique only *inside* its domain — every mail domain
+    is expected to answer `postmaster`, and this estate already has one — while an
+    Authentik username is global. So when the bare localpart belongs to somebody
+    else, the name is the whole address: unique because the address is, and the
+    same account a retry finds (it is found by email, not by name).
+
+    Without this the second tenant whose first mailbox is `postmaster@` cannot be
+    provisioned at all: it dies on Authentik's own "This field must be unique"
+    for a name the mail host chose, not one the caller asked for.
+    """
+    address = email.strip().lower()
+    local = address.split("@", 1)[0]
+    have = {str(name).strip().lower() for name in taken or []}
+    return local if local not in have else address
+
+
 def add_user(email: str, name: str, groups: list[str], rotate: bool = True) -> dict:
     """Create or extend one account on both planes.
 
@@ -658,7 +677,8 @@ def add_user(email: str, name: str, groups: list[str], rotate: bool = True) -> d
         result["authentik"] = f"updated groups={merged}"
         result["groups"] = merged
     else:
-        created = ak.create_user(local, email, name or local, ak.group_ids(wanted))
+        created = ak.create_user(sign_in_name(email, {u.get("username") for u in ak.users()}),
+                                 email, name or local, ak.group_ids(wanted))
         user = created
         result["authentik"] = f"created pk={created.get('pk')}"
         result["groups"] = sorted(ak.user_groups(user)) or wanted

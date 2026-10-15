@@ -58,6 +58,11 @@ class FakeAuthentik:
         return user["groups_obj"]
 
     def create_user(self, username, email, name, group_ids):
+        if any(u["username"].lower() == username.lower() for u in self.by_email.values()):
+            # What the real Authentik answers — the collision a second tenant's
+            # `postmaster@` used to die on.
+            raise RuntimeError('authentik POST /api/v3/core/users/: HTTP 400 '
+                               '{"username":["This field must be unique."]}')
         user = {"pk": len(self.by_email) + 1, "username": username, "email": email,
                 "name": name, "is_active": True,
                 "groups_obj": sorted(n for n, i in self.catalog.items() if i in group_ids)}
@@ -311,6 +316,50 @@ class DomainTest(unittest.TestCase):
             mail_admin.remove_domain("gone.innotel.us")
         with self.assertRaises(mail_admin.NotFound):
             mail_admin.remove_user("nobody@innotel.us")
+
+    def test_a_free_localpart_is_the_sign_in_name(self):
+        self.sw.create_domain("acme.innotel.us", None)
+        mail_admin.add_user("jane@acme.innotel.us", "Jane", [], rotate=False)
+        self.assertEqual("jane", self.ak.user("jane@acme.innotel.us")["username"])
+
+    def test_a_localpart_somebody_else_holds_does_not_stop_the_tenant(self):
+        """The estate already has a `postmaster`, and every domain is expected to.
+
+        A mailbox's localpart is unique only inside its domain while an Authentik
+        username is global, so the second tenant whose first mailbox is
+        `postmaster@` used to die on Authentik's raw "must be unique" — for a name
+        the mail host chose, not one the caller asked for. The identity is named
+        by the whole address instead, which is unique because the address is.
+        """
+        self.ak.by_email["postmaster@denovocredit.com"] = {
+            "pk": 99, "username": "postmaster", "email": "postmaster@denovocredit.com",
+            "name": "postmaster", "is_active": True, "groups_obj": ["Mail"]}
+        self.sw.create_domain("acme.innotel.us", None)
+
+        result = mail_admin.add_user("postmaster@acme.innotel.us", "", [], rotate=False)
+
+        self.assertTrue(result["created"])
+        self.assertEqual("postmaster@acme.innotel.us",
+                         self.ak.user("postmaster@acme.innotel.us")["username"])
+        self.assertEqual("postmaster", self.ak.user("postmaster@denovocredit.com")["username"])
+
+
+class SignInNameTest(unittest.TestCase):
+    """The name an identity gets when its mailbox localpart is already taken."""
+
+    def test_the_localpart_is_the_name_until_it_belongs_to_somebody_else(self):
+        self.assertEqual("jane",
+                         mail_admin.sign_in_name("jane@acme.innotel.us",
+                                                 {"postmaster", "ops"}))
+        self.assertEqual("postmaster@acme.innotel.us",
+                         mail_admin.sign_in_name("postmaster@acme.innotel.us",
+                                                 {"postmaster"}))
+
+    def test_the_comparison_ignores_case_and_the_answer_is_normalised(self):
+        self.assertEqual("postmaster@acme.innotel.us",
+                         mail_admin.sign_in_name("Postmaster@Acme.Innotel.US",
+                                                 {"Postmaster"}))
+        self.assertEqual("jane", mail_admin.sign_in_name("Jane@acme.innotel.us", set()))
 
 
 class PublishTest(unittest.TestCase):
