@@ -1,0 +1,23 @@
+[Unit]
+Description=Resend inbound receiver (Resend webhook to Stalwart)
+Documentation=https://resend.com/docs/dashboard/receiving/introduction
+After=network-online.target stalwart.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The estate's public IP cannot accept inbound port 25, so Resend receives the
+# mail for innotel.us and this service hands each message to the local Stalwart.
+ExecStart=/usr/bin/python3 /opt/oasis/scripts/resend-inbound.py
+EnvironmentFile=/etc/oasis/resend-inbound.env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/oasis
+ReadWritePaths=/var/lib/resend-inbound
+
+[Install]
+WantedBy=multi-user.target

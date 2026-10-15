@@ -1,0 +1,10 @@
+[Unit]
+Description=Resend inbound path health check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/oasis/scripts/resend-inbound-check.py
+EnvironmentFile=/etc/oasis/resend-inbound.env
+EnvironmentFile=-/etc/oasis/resend-inbound-check.env
