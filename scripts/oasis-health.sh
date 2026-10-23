@@ -90,7 +90,11 @@ record() {
   case "$status" in
     PASS)
       PASS=$((PASS + 1))
-      [ "$QUIET" = false ] && printf 'PASS %-34s %s\n' "$label" "$detail"
+      # An `if` rather than `[ ... ] && printf`: under `set -e` the short-circuit
+      # returns 1 in quiet mode and aborts the whole run at the first PASS.
+      if [ "$QUIET" = false ]; then
+        printf 'PASS %-34s %s\n' "$label" "$detail"
+      fi
       ;;
     WARN)
       WARNINGS=$((WARNINGS + 1))

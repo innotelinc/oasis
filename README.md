@@ -1,15 +1,19 @@
 <div align="center">
 
-# 🌴 Oasis — Open Enterprise Communication Platform
+# 🌴 Loomix — Mail Platform
 
-**Build and deploy Zimbra FOSS from source — one command, any Linux mail server.**
+**Stalwart's mail engine behind the Loomix Mail client — email, calendars, contacts and files on your own infrastructure.**
 
-Oasis is an open-source deployment foundation for enterprise email and collaboration. This
-repo is the first slice of the platform: a **Dockerized Zimbra FOSS build** (from official
-source via `zm-build`) plus an idempotent installer that turns a bare server into a working
-mail host — Let's Encrypt SSL, smarthost relay for ISP port-25 blocks, and verification
-built in. Email transport, identity, calendar, contacts, files, automation, administration,
-and observability land incrementally on top.
+Loomix is the Innotel ecosystem's **MailOps** platform. It runs **Stalwart** as the
+mail engine (SMTP, IMAP, JMAP, Sieve, calendars, contacts and file storage) behind
+**Loomix Mail**, the one browser client for mail, calendar, contacts, files and
+admin. Identity is **Authentik**, DNS and certificates are **Cerulean**, edge
+routing is **NPM**, and the operator tools — tenant administration, migration,
+health and compliance reporting — ship in this repo.
+
+**Loomix is the product name for the platform formerly called Oasis.** The
+repository, scripts and `oasis.<domain>` hostnames keep their names for
+continuity; everything a customer sees says Loomix.
 
 [![CI](https://github.com/innotelinc/oasis/actions/workflows/ci.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/ci.yml)
 [![Conformity](https://github.com/innotelinc/oasis/actions/workflows/conform.yml/badge.svg)](https://github.com/innotelinc/oasis/actions/workflows/conform.yml)
@@ -17,197 +21,187 @@ and observability land incrementally on top.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Theme: Unity](https://img.shields.io/badge/theme-Unity-6366f1)](https://github.com/innotelinc/innotel-platform-stack/blob/main/standards/unity/README.md)
 
-*Mail that is yours — from source to inbox.*
+*Mail that is yours — from domain to inbox.*
 
 </div>
 
 ---
 
-## Why Oasis
+## Why Loomix
 
-| Problem | Oasis answer |
+| Problem | Loomix answer |
 | --- | --- |
-| Zimbra FOSS builds are painful to reproduce | One command, any Linux mail server; builds Zimbra FOSS from source |
-| Mail identity sprawl across systems | Cerulean Authentik-first where applicable; disable a user and mail access dies |
-| Secrets committed to .env or repos | Cerulean Vault is the only secrets store; .env carries derived references and is gitignored |
-| Mail stack is hard to rebuild from source | Oasis captures the full build toolchain and deployment payload per release |
+| Mail, calendar, contacts and files in four products | One engine (**Stalwart**) and one client (**Loomix Mail**) behind one login |
+| Identity sprawl across mail and admin | **Authentik** OIDC for both; one disabled account closes both doors |
+| DNS and certificates as manual chores | **Cerulean** owns the zone and the wildcard certificate; the platform asks, never holds a resolver key |
+| Provisioning is a recipe of CLI calls | `oasis-mail-admin.py` creates the domain, its DKIM, its Cerulean zone, the identity and the mailbox — or all of it as one tenant call |
+| Mail posture is discovered after a bounce | Daily MX/SPF/DKIM/DMARC/MTA-STS/TLS-RPT checks, dated reports and an exit code a timer can alert on |
+| Moving off Exchange/Google/Zimbra is bespoke | `migrate-mailboxes.sh` with imapsync and per-provider presets |
 
-> **About Oasis** — a self-hosted, open-source enterprise communication platform. Build a
-> current Zimbra FOSS release from source inside Docker, then deploy it to any Linux server
-> with one command — SSL, outbound relay, and post-install verification included. The
-> broader Oasis platform (identity, collaboration, observability) builds on this foundation.
+> **About Loomix** — a self-hosted, open-source mail and collaboration platform.
+> Stalwart carries the mail; Loomix Mail is the client; Cerulean Authentik,
+> Cerulean Vault and Cerulean trust are the platform behind them.
 > **Landing page:** [innotelinc.github.io/oasis](https://innotelinc.github.io/oasis)
 
 ---
+
+## 🧱 Architecture
+
+```
+                    ┌──────────────────────────────┐
+  browser ────────► │  Loomix Mail (Stalwart client)      │  mail · calendar · contacts · files · admin
+                    │  Next.js, JMAP client        │
+                    └──────────────┬───────────────┘
+                                   │ JMAP / HTTPS
+                    ┌──────────────▼───────────────┐
+                    │  Stalwart                    │  SMTP · IMAP · JMAP · Sieve
+                    │  one Rust service, embedded  │  calendars · contacts · file storage
+                    └──────────────┬───────────────┘
+                                   │
+        ┌──────────────────────────┼──────────────────────────┐
+        ▼                          ▼                          ▼
+  Authentik                  Cerulean DNS/TLS              NPM Edge
+  identity + OIDC            zone · DKIM · certs          app/api/auth/mail/files/admin
+```
+
+The mail host runs Stalwart natively and Loomix Mail as its only container. The
+operator scripts in `scripts/` are installed as systemd units alongside them.
+
+## 🌐 Live surfaces
+
+| Host | What it serves |
+| --- | --- |
+| `loomix.art`, `loomix.lol` | Loomix Mail — webmail, calendar, contacts, files (new brand domains) |
+| `mail.loomix.art`, `mail.loomix.lol` | JMAP discovery, autoconfig, autodiscover, MTA-STS for the Loomix domains |
+| `oasis.<domain>` / `app.<domain>` | Loomix Mail on the legacy estate hostnames |
+| `api.<domain>` | the client's API and JMAP session |
+| `auth.<domain>` | Authentik SSO |
+| `mail.<domain>` | JMAP discovery, autoconfig, autodiscover, MTA-STS |
+| `files.<domain>` | Stalwart file storage |
+| `admin.<domain>` | domains, users, tenant provisioning, platform health |
+
+`mail.<domain>` and `app.<domain>` are names for the same platform; the apex
+(`oasis.<domain>`) is the front door.
 
 ## ✨ Highlights
 
 | | | |
 |---|---|---|
-| 🐳 **Source-built Zimbra** | Official `zm-build` inside Docker — reproducible `zcs-*.tgz` installers for Ubuntu, Debian, Rocky, Alma, and Oracle Linux |
-| 🚀 **One-command deploy** | `./build.sh deploy user@host` — SSH check → upload → install, with live progress and streaming output |
-| ⚙️ **Full installer** | Dependencies, Postfix swap, hostname, Zimbra install, HTTPS redirect, Let's Encrypt SSL, relay, swap — all idempotent |
-| 📮 **ISP-relay aware** | Smarthost outbound relay (587/465) bypasses port-25 blocks; or stand up your own `emailrelay` VPS with one script |
-| ✅ **Pre-flight checks** | `./build.sh check` validates config, DNS resolution, and port-80 reachability before the long install |
-| 🔁 **Idempotent builds** | Re-runs skip the 2–6 hour zm-build when an installer for the same version + OS already exists |
-| 🩺 **Health & compliance** | Domain mail posture (MX/SPF/DKIM/DMARC/TLS/ports) with PASS/WARN/FAIL reports |
-| 🔐 **Authentik identity** | OIDC SSO foundation for the platform services (`auth.<domain>`) |
+| 📧 **Stalwart engine** | SMTP, IMAP, JMAP, Sieve, calendars, contacts and file storage — one binary, embedded store, no external database |
+| 🖥️ **Loomix Mail** | Mail, calendar, contacts and files behind one login, with admin, themes, plugins and settings |
+| 🔐 **Authentik SSO** | OIDC-native sign-in for the client and the admin page; no second password store |
+| 🌐 **Edge + wildcard TLS** | `app`, `api`, `auth`, `mail`, `files`, `admin` in NPM, with a wildcard Let's Encrypt certificate |
+| 🧑‍💼 **Tenant administration** | Add/remove domains and users; the Stalwart record, Authentik identity, Cerulean zone, DKIM/SPF/DMARC and delegation are written together |
+| 🩺 **Health & compliance** | MX/SPF/DKIM/DMARC/MTA-STS/TLS-RPT posture plus host/TLS/SSO checks, with PASS/WARN/FAIL, `--json`, dated Markdown reports and timer-friendly exit codes |
+| 📦 **Migration presets** | imapsync from Exchange, Google Workspace and Zimbra, with passfiles and dry-run |
+| 🛠️ **Autodiscovery** | Published `autoconfig`/`autodiscover` names, SRV records, MTA-STS and TLS-RPT for every hosted domain |
+
+## 🎨 Brand
+
+The Loomix mark is a palm on an indigo-to-violet tile, with the water line reading as
+both an oasis and an underscore. Source assets live in
+[`web/landing/brand/`](web/landing/brand):
+
+| File | Use |
+| --- | --- |
+| `loomix-mark.svg` | app icon, favicon, avatar |
+| `loomix-logo.svg` / `loomix-logo-inverse.svg` | wordmark on light / dark |
+| `loomix-og.png` | 1200×630 share card |
+| `icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png`, `favicon.ico` | PWA and browser icons |
+
+The same set is shipped by the client in `webmail-work/public/branding/` as
+`Loomix_*`; set `APP_NAME=Loomix Mail` and point `FAVICON_URL`,
+`LOGIN_LOGO_LIGHT_URL` and `LOGIN_LOGO_DARK_URL` at those files.
 
 ## 🚀 Quick start
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/innotelinc/oasis.git
 cd oasis
-
-# 2. (Optional) Configure
-cp .env.example .env   # edit with your preferences
-
-# 3. Build the installer — then automatically installs on this server
-#    when run as root (on a dev machine, add --skip-install)
-./build.sh
-
-# 4. Or deploy to a remote mail server (builds dir → server → auto-install)
-./build.sh deploy root@mail.example.com
+cp .env.example .env        # secrets are generated, or resolved through Cerulean Vault
+./scripts/setup-oasis.sh    # identity + edge stack (local or production profile)
 ```
 
-Build a specific version or target OS:
+Then provision mail from the admin page (or its CLI):
 
 ```bash
-./build.sh build --version 10.1.21                 # specific Zimbra version
-./build.sh build --base-image ubuntu:24.04         # Ubuntu 24.04
-./build.sh build --base-image rockylinux:9         # Rocky Linux 9 (RHEL-compatible)
-./build.sh build --no-cache                        # disable Docker cache
-./build.sh build --rebuild                         # force rebuild even if .tgz exists
+python3 scripts/oasis-mail-admin.py    # OIDC-native admin at admin.<domain>
 ```
 
-Before installing on a real server, edit `scripts/install-config.env` (hostname, domain,
-public IP, admin passwords, relay settings) and run the diagnostics:
+A domain added there gets its Stalwart record, DKIM keys, Cerulean zone and
+delegation; a user gets an Authentik identity and the matching Stalwart mailbox.
+Removing either takes the whole chain back.
 
-```bash
-./build.sh check      # config, DNS, port 80, installer — exits non-zero on FAIL
-```
+## 🛠️ Operator commands
 
-## Commands
+| Command | What it does |
+| --- | --- |
+| `scripts/setup-oasis.sh` | Local/production stack lifecycle, edge hostnames and certificate sync |
+| `scripts/oasis-mail-admin.py` | OIDC-native admin page and tenant API: domains, users, DKIM, zones, delegation |
+| `scripts/oasis-mail-user.py` | CLI for one mailbox; `passwd` rotates the Authentik password |
+| `scripts/oasis-mail-health.py` | Grades MX/SPF/DMARC/DKIM/MTA-STS/TLS-RPT for every Stalwart domain; `--json`, exit 2 on FAIL |
+| `scripts/oasis-health.sh` | Host/TLS/SSO checks for every surface; `--report` writes dated Markdown |
+| `scripts/migrate-mailboxes.sh` | imapsync migration with Exchange/Google/Zimbra presets, passfiles and `--dry-run` |
+| `scripts/cerulean/` | Certificate fetch, DKIM/autoconfig publication and zone verification through Cerulean |
+| `scripts/npm-proxy-hosts.py` | Reproducible NPM hostnames with a wildcard certificate and drift check |
+| `scripts/verify.sh`, `scripts/smoke-oasis.sh` | Post-deploy verification |
 
-| Command | Description |
-|---------|-------------|
-| `./build.sh` | Build latest Zimbra, then install on this server (as root) |
-| `./build.sh install [zcs-*.tgz]` | Install on this server (standalone) |
-| `./build.sh check [--config FILE]` | Pre-install diagnostics: config, DNS, port 80, installer |
-| `./build.sh build --skip-install` | Build only (e.g. on a dev machine) |
-| `./build.sh deploy user@host` | Deploy and install on remote server via SSH |
-| `./build.sh info` | Show build configuration |
-| `./build.sh clean` | Remove all artifacts and images |
-| `./build.sh test` | Test the build container |
-| `./build.sh list` | List available base OS images |
+## 🩺 Health and compliance
 
-## 🧱 Architecture
+The two checks answer different questions and both run on a timer:
 
-```
-┌─────────────────────────────────────────────┐
-│  Docker Container                            │
-│  ┌───────────────────────────────────────┐   │
-│  │  zm-build (source compilation)        │   │
-│  │  ├─ OpenJDK 8                         │   │
-│  │  ├─ Ant + Maven                       │   │
-│  │  ├─ GCC toolchain                     │   │
-│  │  └─ Perl, Ruby, Python                │   │
-│  └───────────────┬───────────────────────┘   │
-│                  │ output .tgz               │
-└──────────────────┼──────────────────────────┘
-                   ▼
-            ./builds/zcs-*.tgz
-                   │
-    ┌──────────────┼──────────────┐
-    ▼              ▼              ▼
-┌────────┐  ┌──────────┐  ┌──────────┐
-│ Ubuntu │  │  Rocky   │  │  Alma    │
-│ Debian │  │  Linux   │  │  Linux   │
-└────────┘  └──────────┘  └──────────┘
-      Any Linux mail server target
-```
+- `oasis-mail-health.py` reads the authoritative zone back through Cerulean and grades
+  what the world sees — MX, SPF, DMARC, every published DKIM selector, MTA-STS and
+  TLS-RPT. Any FAIL exits 2, so a systemd timer or monitoring wrapper sees it.
+- `oasis-health.sh` probes the platform itself — DNS, TLS chain and expiry, HTTPS for
+  each surface — and writes a dated Markdown report with `--report`.
 
-After a successful build, the installer lands in `./builds/` as
-`zcs-<version>_GA_<hash>.<OS>_64.<timestamp>.tgz`.
-
-## Requirements
-
-| Component | Minimum |
-|-----------|---------|
-| Docker | 20.10+ |
-| Disk space | ~15 GB free |
-| RAM | 4+ GB recommended (8+ cores / 16 GB → ~2–3 h builds) |
-
-Supported base images: `ubuntu:24.04`, `ubuntu:22.04`, `ubuntu:20.04`, `rockylinux:9`,
-`rockylinux:8`, `almalinux:9`, `oraclelinux:9`.
+The Loomix admin page shows the latest result of both, with the report timestamp, so
+the operator does not have to open a shell to see that a certificate is close to
+expiry or a DKIM selector is unpublished.
 
 ## 📚 Documentation
 
 | Document | Covers |
 |---|---|
-| [docs/build-and-deploy.md](docs/build-and-deploy.md) | Deploy (SSH auth, manual install), installer sections, port-25 smarthost relay, full `install-config.env` reference, troubleshooting |
-| [docs/SYSTEMD.md](docs/SYSTEMD.md) | Host lifecycle: systemd installer + units |
-| [docs/COMPLIANCE.md](docs/COMPLIANCE.md) | Health monitoring + compliance reports |
-| [docs/MIGRATION.md](docs/MIGRATION.md) | Exchange / Google / Zimbra mailbox migration |
+| [docs/ADMIN.md](docs/ADMIN.md) | The admin page and tenant API: domains, users, zones, delegation, OIDC |
+| [docs/COMPLIANCE.md](docs/COMPLIANCE.md) | Health monitoring, compliance reports, exit codes |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | Exchange / Google Workspace / Zimbra mailbox migration |
 | [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md) | Backup, restore, retention, DR |
 | [docs/SSO.md](docs/SSO.md) | Authentik identity integration |
-
-## Platform services
-
-- **Edge hostnames** — `scripts/npm-proxy-hosts.py` provisions `app`, `api`, `auth`,
-  `mail`, `files`, and `admin` hosts in Nginx Proxy Manager, with a wildcard
-  `*.<domain>` Let's Encrypt cert via DNS-01 by default (`--check` for drift).
-- **Health monitoring** — `scripts/oasis-health.sh` checks mail posture with exit codes
-  for cron, `--json`, and dated Markdown compliance reports.
-- **Migration** — `scripts/migrate-mailboxes.sh` (imapsync-based) moves Exchange, Google
-  Workspace, and Zimbra mailboxes with per-provider presets.
-- **Lifecycle** — `scripts/setup-oasis.sh` (local/production), `backup-oasis.sh`,
-  `restore-oasis.sh`, `upgrade-oasis.sh`, `uninstall-oasis.sh`, `smoke-oasis.sh`.
+| [docs/SYSTEMD.md](docs/SYSTEMD.md) | Host lifecycle: systemd units |
+| [docs/stack.md](docs/stack.md) | What Loomix owns, provides, consumes and does not own |
+| [docs/roadmap.md](docs/roadmap.md) | Direction, engine decision and delivery phases |
 
 ## 📦 Releases
 
-Release tags use `vMAJOR.MINOR.PATCH` (independent of Zimbra versions). Each release resolves
-and builds the **newest upstream Zimbra FOSS release** at release time (no GitHub repository
-variable required); pin a specific Zimbra `X.Y.Z` from the Actions UI via `workflow_dispatch`.
+Release tags use `vMAJOR.MINOR.PATCH` and are independent of the Stalwart and
+Loomix Mail versions they deploy. The release workflow publishes the Compose
+bundle, SBOM, checksums and provenance attestations.
 
 ## Project status
 
-Under active development. The current release provides reproducible Zimbra FOSS builds,
-mail-server deployment, the Cerulean Authentik-backed identity stack, NPM edge provisioning with
-wildcard certificates, domain health monitoring and compliance reporting, mailbox
-migration tooling, backup/restore, and systemd lifecycle management. Multi-tenancy,
-automation, and administration modules are planned and delivered incrementally.
+Loomix v0.2.0 ships the merged platform: Stalwart as the engine, Loomix Mail as
+the client, Authentik identity, Cerulean DNS/TLS, tenant administration, edge
+hostnames with a wildcard certificate, migration presets, and health/compliance
+reporting. The roadmap's next milestone is the v1.0 LTS hardening pass.
 
-**Direction:** Oasis is moving off Zimbra's Java stack to a lightweight engine — **Stalwart**
-for mail with **Bulwark** webmail, on Cerulean trust and Authentik identity — absorbing the best
-of what Forward Email's open-source service does without carrying its multi-service runtime. See
-[docs/roadmap.md](docs/roadmap.md) for the comparison, the decision, and the phases, including the
-mailbox-domain vs sending-domain stance (Signara's `signara.innotel.us` is a sending domain).
+The repo still carries the historical Zimbra builder (`build.sh`, `Dockerfile`,
+`scripts/install-oasis.sh`) from the v0.1 line. It is **retired**: it is not the
+platform path, is not deployed in the estate, and is kept only for reproducible
+builds of that older line.
 
 ## Licensing
 
-Oasis is released under the [MIT License](LICENSE). Upstream Zimbra, imapsync, emailrelay,
-Docker base images, and other dependencies retain their own licenses; consult their notices
-before redistribution.
-
----
-
-*Oasis — enterprise mail, self-hosted from source.*
+Loomix is released under the [MIT License](LICENSE). Stalwart is AGPL-3.0,
+Loomix Mail is AGPL-3.0 (a fork of Bulwark Webmail), imapsync and the other dependencies retain
+their own licenses; consult their notices before redistribution.
 
 ## 🏛️ Platform stack
 
-Oasis is the ecosystem's **MailOps** platform — email, calendars, contacts, and collaboration in the
-[**Innotel Platform Stack**](https://github.com/innotelinc/innotel-platform-stack) — the
-canonical single-responsibility architecture where Cerulean Authentik owns identity, Cerulean Vault owns
-secrets, Cerulean owns trust, ONYX owns storage, Magnate owns revenue, NPM Edge owns the edge, and every other
-platform is a 
----
-
-## License
-
-Oasis is licensed under the MIT License. See [LICENSE](LICENSE) for the full text.
-
-business function that consumes them. See
-[docs/stack.md](docs/stack.md) for this platform's owns/consumes boundaries and its
-Cerulean Vault secret setup.
+Loomix is the ecosystem's **MailOps** platform — email, calendars, contacts and
+collaboration in the [**Innotel Platform Stack**](https://github.com/innotelinc/innotel-platform-stack),
+the canonical single-responsibility architecture where Cerulean Authentik owns
+identity, Cerulean Vault owns secrets, Cerulean owns trust, ONYX owns storage,
+Magnate owns revenue, and NPM Edge owns the edge. See [docs/stack.md](docs/stack.md)
+for this platform's owns/consumes boundaries and its Cerulean Vault setup.

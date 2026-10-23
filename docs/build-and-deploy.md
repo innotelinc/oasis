@@ -1,4 +1,4 @@
-# Oasis — Build & Deployment Reference
+# Loomix — Build & Deployment Reference
 
 ### Installing on Your Mail Server
 

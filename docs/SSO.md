@@ -1,6 +1,6 @@
-# Oasis SSO integration
+# Loomix SSO integration
 
-Oasis uses Authentik as its OAuth 2.0 and OpenID Connect identity provider.
+Loomix uses Authentik as its OAuth 2.0 and OpenID Connect identity provider.
 Applications should use Authorization Code with PKCE where possible and must
 validate tokens locally or through the provider's standards-compliant endpoints.
 
@@ -31,7 +31,7 @@ OIDC_REDIRECT_URI=https://service.oasis.innotel.us/auth/callback
 
 ## Cerulean (shared identity plane)
 
-`auth.oasis.innotel.us` fronts the shared Cerulean Authentik, where the Oasis client
+`auth.oasis.innotel.us` fronts the shared Cerulean Authentik, where the Loomix client
 catalog from `config/authentik/providers.yaml.example` is registered: `oasis-app`
 (public, PKCE), `oasis-admin`, `oasis-files`, `oasis-mail`, and `oasis-api`. Issuer URLs
 are provider-scoped (for example
@@ -45,7 +45,7 @@ runtime environment file.
 
 ## Required validation
 
-Every Oasis service must:
+Every Loomix service must:
 
 - Validate the issuer, signature, expiration, `nonce`, and `state`.
 - Validate the token audience and authorized-party claims.
@@ -58,7 +58,7 @@ Every Oasis service must:
 
 Recommended role mapping:
 
-| Authentik group | Oasis role |
+| Authentik group | Loomix role |
 |---|---|
 | `oasis-platform-admins` | platform administrator |
 | `oasis-tenant-admins` | tenant administrator |

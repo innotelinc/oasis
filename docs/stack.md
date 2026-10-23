@@ -1,10 +1,10 @@
-# 🌴 Oasis — Platform Stack Role
+# 🌴 Loomix — Platform Stack Role
 
 **Classification: MailOps**
 
 Enterprise email and collaboration: mail transport, calendars, contacts, and team communications on your own infrastructure.
 
-This page declares Oasis's role in the
+This page declares Loomix's role in the
 [**Innotel Platform Stack**](https://github.com/innotelinc/innotel-platform-stack) —
 the canonical single-responsibility architecture. The stack is defined in exactly one
 place; this page links each product to it and states what this platform owns, consumes,
@@ -70,7 +70,7 @@ value — a reference left in place reaches the container as a literal string.
 **Cerulean owns DNS and TLS for the mail platform.** It runs the estate's Technitium
 and is the only principal permitted to write to it, and it issues the mail wildcard's
 Let's Encrypt certificate (`*.innotel.us`) with a DNS‑01 challenge written straight
-into Technitium. Oasis never talks to Technitium or to an ACME CA itself; it holds a
+into Technitium. Loomix never talks to Technitium or to an ACME CA itself; it holds a
 path‑scoped Cerulean service key (`ceru_…`, kept in Cerulean Vault at
 `cerulean/oasis#cerulean_service_key`) and pulls certificate material and pushes DNS
 records over Cerulean's service bridge.
@@ -93,4 +93,4 @@ See [`scripts/cerulean/README.md`](../scripts/cerulean/README.md) for the full m
 
 ---
 
-*Oasis · MailOps · [Innotel Platform Stack](https://github.com/innotelinc/innotel-platform-stack)*
+*Loomix · MailOps · [Innotel Platform Stack](https://github.com/innotelinc/innotel-platform-stack)*

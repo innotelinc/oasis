@@ -33,6 +33,7 @@ Authentik's own group records rather than trusted from a token claim
     GET  /auth/callback         finish it
     GET  /auth/logout           clear the session
     GET  /api/state             JSON: domains and users
+    GET  /api/posture           JSON: latest host/TLS/SSO and mail-posture run
     POST /api/domains           {action: add|remove, name, description?}
     POST /api/users             {action: add|remove, email, name?, groups?}
     POST /api/users/password    {email}   rotate the Authentik password (returned once)
@@ -111,6 +112,12 @@ SERVICE = "oasis-mail-admin"
 USING = ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"]
 DEFAULT_MAIL_GROUP = "Mail"
 COOKIE = "oasis_admin"
+# What the daily posture timer leaves behind. The page reads these files rather
+# than probing on load: the report is the same one cron/monitoring acted on, and
+# a single-threaded admin page must not spend 30 s on TLS handshakes.
+REPORT_DIR = Path(os.environ.get("OASIS_REPORT_DIR", "/opt/oasis/reports"))
+POSTURE_FILE = Path(os.environ.get("OASIS_POSTURE_FILE", "/var/lib/oasis/mail-posture.json"))
+HEALTH_STALE_SECONDS = int(os.environ.get("OASIS_HEALTH_STALE_SECONDS", "129600"))
 
 if not SESSION_SECRET:
     for candidate in (Path("/etc/oasis/oasis-mail-admin.secret"),
@@ -794,9 +801,85 @@ def rotate_password(email: str) -> dict:
 
 
 # ── HTTP ────────────────────────────────────────────────────────────────────
+def _report_rows(text: str) -> list[dict]:
+    """Pull the check rows out of a generated compliance Markdown report."""
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 3 or cells[1] not in ("PASS", "WARN", "FAIL"):
+            continue
+        rows.append({"label": cells[0], "status": cells[1], "detail": cells[2]})
+    return rows
+
+
+def platform_health() -> dict:
+    """The latest posture run, as the admin page shows it.
+
+    Two independent sources, because they fail for different reasons:
+
+    * the dated Markdown report from `oasis-health.sh --report` (hosts, TLS,
+      SSO, edge reachability);
+    * `mail-posture.json` from `oasis-mail-health.py` (MX/SPF/DMARC/DKIM/
+      MTA-STS/TLS-RPT read back through Cerulean).
+
+    Missing or unreadable artifacts are reported, not raised: the page has to
+    render on a host where the timer has not run yet.
+    """
+    out: dict = {"report": None, "mail": None, "stale": True, "now": time.time()}
+    stamps: list[float] = []
+
+    try:
+        reports = sorted(REPORT_DIR.glob("oasis-compliance-*.md"),
+                         key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        reports = []
+    if reports:
+        latest = reports[0]
+        try:
+            text = latest.read_text(encoding="utf-8", errors="replace")
+            mtime = latest.stat().st_mtime
+        except OSError as exc:
+            out["report"] = {"error": str(exc)[:200]}
+        else:
+            counts = {"pass": 0, "warn": 0, "fail": 0}
+            match = re.search(r"\*\*Result:\*\*\s*(\d+) pass,\s*(\d+) warn,\s*(\d+) fail",
+                              text)
+            if match:
+                counts = {"pass": int(match.group(1)), "warn": int(match.group(2)),
+                          "fail": int(match.group(3))}
+            out["report"] = {
+                "file": latest.name,
+                "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)),
+                "epoch": mtime,
+                **counts,
+                "rows": _report_rows(text),
+            }
+            stamps.append(mtime)
+
+    if POSTURE_FILE.is_file():
+        try:
+            doc = json.loads(POSTURE_FILE.read_text(encoding="utf-8"))
+            mtime = POSTURE_FILE.stat().st_mtime
+            out["mail"] = {
+                "file": POSTURE_FILE.name,
+                "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime)),
+                "epoch": mtime,
+                "domains": doc.get("domains") or {},
+            }
+            stamps.append(mtime)
+        except (OSError, ValueError) as exc:
+            out["mail"] = {"error": str(exc)[:200]}
+
+    out["stale"] = (not stamps) or (time.time() - max(stamps) > HEALTH_STALE_SECONDS)
+    return out
+
+
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Oasis Mail Admin</title>
+<title>Loomix Admin</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiByb2xlPSJpbWciIGFyaWEtbGFiZWw9Ikxvb21peCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjNGY0NmU1Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMC41NSIgc3RvcC1jb2xvcj0iIzYzNjZmMSIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNhODU1ZjciLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSI1MTIiIGhlaWdodD0iNTEyIiByeD0iMTIwIiBmaWxsPSJ1cmwoI2cpIi8+CiAgPGNpcmNsZSBjeD0iMjU2IiBjeT0iMjA2IiByPSIxMTIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMTAiLz4KICA8cGF0aCBkPSJNMjU4IDM4MiBDMjUwIDMzNiAyNTQgMjk2IDI3NiAyNTQiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLXdpZHRoPSIyNiIKICAgICAgICBzdHJva2UtbGluZWNhcD0icm91bmQiIGZpbGw9Im5vbmUiLz4KICA8cGF0aCBkPSJNMjc2IDI1MCBDMzIyIDIzMiAzNzQgMjM2IDQwOCAyNjIgQzM2NiAyODAgMzE4IDI3OCAyNzYgMjU4IFoiIGZpbGw9IiNmZmZmZmYiLz4KICA8cGF0aCBkPSJNMjc2IDI1MCBDMjMwIDIzMiAxNzggMjM2IDE0NCAyNjIgQzE4NiAyODAgMjM0IDI3OCAyNzYgMjU4IFoiIGZpbGw9IiNmZmZmZmYiLz4KICA8cGF0aCBkPSJNMjc4IDI0NiBDMzE2IDIwNCAzNjIgMTg2IDQwMiAxOTIgQzM3OCAyMjYgMzM0IDI0NiAyODIgMjUyIFoiIGZpbGw9IiNmZmZmZmYiLz4KICA8cGF0aCBkPSJNMjc4IDI0NiBDMjQwIDIwNCAxOTQgMTg2IDE1NCAxOTIgQzE3OCAyMjYgMjIyIDI0NiAyNzQgMjUyIFoiIGZpbGw9IiNmZmZmZmYiLz4KICA8cGF0aCBkPSJNMjgyIDI0MiBDMjg4IDE5MiAzMDQgMTUyIDMzMiAxMjYgQzM0MCAxNzAgMzIyIDIxNiAyOTAgMjQ2IFoiIGZpbGw9IiNmZmZmZmYiLz4KICA8cGF0aCBkPSJNMjc0IDI0MiBDMjY4IDE5MiAyNTIgMTUyIDIyNCAxMjYgQzIxNiAxNzAgMjM0IDIxNiAyNjYgMjQ2IFoiIGZpbGw9IiNmZmZmZmYiLz4KICA8Y2lyY2xlIGN4PSIyNjYiIGN5PSIyNjYiIHI9IjciIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuOSIvPgogIDxjaXJjbGUgY3g9IjI4NiIgY3k9IjI2NCIgcj0iNyIgZmlsbD0iI2ZmZmZmZiIgb3BhY2l0eT0iMC45Ii8+CiAgPHBhdGggZD0iTTg4IDM5MCBRMTcyIDM2MiAyNTYgMzkwIFQ0MjQgMzkwIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMTgiCiAgICAgICAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBmaWxsPSJub25lIi8+CiAgPHBhdGggZD0iTTEyNCA0MzYgUTE5MCA0MTQgMjU2IDQzNiBUMzg4IDQzNiIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjEyIgogICAgICAgIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgZmlsbD0ibm9uZSIgb3BhY2l0eT0iMC41Ii8+Cjwvc3ZnPgo=" type="image/svg+xml">
 <style>
 :root{--bg:#0b1020;--panel:#141a2e;--ink:#e8ecff;--muted:#94a0c8;--line:#26304d;
 --accent:#6366f1;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}
@@ -804,7 +887,8 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
 header{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;
 align-items:center;gap:12px;justify-content:space-between}
-h1{font-size:18px;margin:0}.crown{color:var(--accent)}
+h1{font-size:18px;margin:0;display:flex;align-items:center;gap:10px}
+.brandmark{width:26px;height:26px;flex:none;border-radius:8px}
 main{padding:24px;max-width:1080px;margin:0 auto}
 section{background:var(--panel);border:1px solid var(--line);border-radius:12px;
 padding:18px;margin-bottom:22px}
@@ -826,10 +910,16 @@ background:#243052;color:var(--muted)}
 code{background:#0e1426;padding:2px 6px;border-radius:6px}
 .small{color:var(--muted);font-size:13px}
 </style></head><body>
-<header><div><h1><span class="crown">&#9819;</span> Oasis Mail Admin</h1>
+<header><div><h1><svg class="brandmark" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="og" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f46e5"/><stop offset=".55" stop-color="#6366f1"/><stop offset="1" stop-color="#a855f7"/></linearGradient></defs><rect width="512" height="512" rx="120" fill="url(#og)"/><circle cx="256" cy="206" r="112" fill="#fff" opacity=".1"/><path d="M258 382C250 336 254 296 276 254" stroke="#fff" stroke-width="26" stroke-linecap="round" fill="none"/><path d="M276 250C322 232 374 236 408 262 366 280 318 278 276 258Z" fill="#fff"/><path d="M276 250C230 232 178 236 144 262 186 280 234 278 276 258Z" fill="#fff"/><path d="M278 246C316 204 362 186 402 192 378 226 334 246 282 252Z" fill="#fff"/><path d="M278 246C240 204 194 186 154 192 178 226 222 246 274 252Z" fill="#fff"/><path d="M282 242C288 192 304 152 332 126 340 170 322 216 290 246Z" fill="#fff"/><path d="M274 242C268 192 252 152 224 126 216 170 234 216 266 246Z" fill="#fff"/><path d="M88 390Q172 362 256 390T424 390" stroke="#fff" stroke-width="18" stroke-linecap="round" fill="none"/><path d="M124 436Q190 414 256 436T388 436" stroke="#fff" stroke-width="12" stroke-linecap="round" fill="none" opacity=".5"/></svg> Loomix Admin</h1>
 <div class="small" id="who"></div></div>
 <a href="/auth/logout"><button class="ghost">Sign out</button></a></header>
 <main>
+<section><h2>Platform health</h2>
+<div id="healthSummary" class="small">loading the latest posture run…</div>
+<table><thead><tr><th>Check</th><th>Status</th><th>Detail</th></tr></thead>
+<tbody id="healthRows"></tbody></table>
+<div class="small">Host/TLS/SSO checks and the mail domain's DNS posture, written by the daily
+Oasis timer. A stale result says so; open the reports directory for the full dated Markdown.</div></section>
 <section><h2>Domains</h2>
 <table><thead><tr><th>Domain</th><th>Status</th><th>Description</th><th></th></tr></thead>
 <tbody id="domains"></tbody></table>
@@ -932,7 +1022,39 @@ document.getElementById('userForm').onsubmit=async e=>{e.preventDefault();
     groups:(f.get('groups')||'').split(',').map(s=>s.trim()).filter(Boolean)},'POST');
     toast('Added '+r.email+'\\nPassword (shown once): '+r.password,'ok');
     e.target.reset();load()}catch(err){toast(err.message,'bad')}};
+async function loadHealth(){
+  try{
+    const h=await api('/api/posture');
+    const rows=document.getElementById('healthRows');rows.innerHTML='';
+    let p=0,w=0,f=0;
+    function add(label,status,detail){
+      const s=(status||'').toUpperCase();
+      if(s==='PASS')p++;else if(s==='WARN')w++;else if(s==='FAIL')f++;
+      const cls=s==='PASS'?'ok':(s==='WARN'?'warn':'bad');
+      rows.appendChild(row([label,'<span class="'+cls+'">'+s+'</span>',detail]));
+    }
+    if(h.report&&h.report.rows)h.report.rows.forEach(r=>add('host · '+r.label,r.status,r.detail));
+    if(h.mail&&h.mail.domains){
+      Object.keys(h.mail.domains).sort().forEach(d=>{
+        (h.mail.domains[d]||[]).forEach(r=>add(d+' · '+r.check,r.result,r.detail));
+      });
+    }
+    const stamp=(h.report&&h.report.generated)||(h.mail&&h.mail.generated)||'never';
+    const bits=[p+' pass',w+' warn',f+' fail','generated '+stamp];
+    if(h.stale)bits.push('STALE — the daily timer has not produced a fresh report');
+    if(h.report&&h.report.error)bits.push('report: '+h.report.error);
+    if(h.mail&&h.mail.error)bits.push('mail posture: '+h.mail.error);
+    const sum=document.getElementById('healthSummary');
+    sum.className='small '+(h.stale?'warn':'');
+    sum.textContent=bits.join(' · ');
+    if(!rows.children.length)rows.appendChild(row(['—','—','no posture rows yet']));
+  }catch(e){
+    const sum=document.getElementById('healthSummary');
+    sum.className='small bad';sum.textContent='health unavailable: '+e.message;
+  }
+}
 load().catch(e=>toast(e.message,'bad'));
+loadHealth();
 </script></body></html>"""
 
 
@@ -1006,6 +1128,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.logout()
             if path == "/api/state":
                 return self.api_state()
+            if path == "/api/posture":
+                return self.api_posture()
             if path == "/healthz":
                 return self.json(200, {"ok": True})
             self.json(404, {"error": "not found"})
@@ -1094,6 +1218,13 @@ class Handler(BaseHTTPRequestHandler):
         state = list_state()
         state["user"] = {"email": session["email"], "groups": session["groups"]}
         self.json(200, state)
+
+    def api_posture(self):
+        """The latest host and mail posture, for the page's health panel."""
+        session = self.require_session()
+        if not session:
+            return
+        self.json(200, platform_health())
 
     def api_domains(self, body: dict):
         action = (body.get("action") or "").lower()

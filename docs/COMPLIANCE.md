@@ -1,6 +1,6 @@
 # Domain health monitoring and compliance reporting
 
-Oasis ships `scripts/oasis-health.sh` to monitor the health of a live
+Loomix ships `scripts/oasis-health.sh` to monitor the health of a live
 deployment and produce a compliance report for the domain. It checks the
 things that determine whether the platform is reachable, mail is deliverable,
 and the deployment meets common email compliance expectations.
@@ -30,7 +30,7 @@ For the base domain (mail compliance):
 ## Usage
 
 ```bash
-# Full check against Oasis module hostnames (reads OASIS_BASE_DOMAIN from .env)
+# Full check against Loomix module hostnames (reads OASIS_BASE_DOMAIN from .env)
 scripts/oasis-health.sh
 
 # Write a dated Markdown compliance report under reports/

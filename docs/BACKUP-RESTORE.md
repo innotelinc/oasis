@@ -1,6 +1,6 @@
-# Oasis backup, restore, and health operations
+# Loomix backup, restore, and health operations
 
-The initial Oasis stack stores state in PostgreSQL, Redis, and Authentik media /
+The initial Loomix stack stores state in PostgreSQL, Redis, and Authentik media /
 templates. Backups must be copied to storage outside the host and protected
 with encryption and restricted access.
 
@@ -15,7 +15,7 @@ docker inspect --format '{{.Name}} {{.State.Health.Status}}' \
 ```
 
 A service being healthy means it is ready to accept requests, not that the
-whole Oasis platform is operational. Also test DNS, TLS, Authentik login, and
+whole Loomix platform is operational. Also test DNS, TLS, Authentik login, and
 an application login after maintenance.
 
 ## Create a backup
@@ -67,7 +67,7 @@ Afterward verify:
 
 1. `docker compose ps` shows all required services healthy.
 2. Authentik administrator login and MFA work.
-3. OIDC discovery and at least one Oasis application login work.
+3. OIDC discovery and at least one Loomix application login work.
 4. Tenant/group mappings and policy behavior are correct.
 5. Reverse-proxy TLS and DNS are healthy.
 

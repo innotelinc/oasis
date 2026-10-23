@@ -3,12 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Oasis — Mail Platform</title>
-  <meta name="description" content="Oasis builds and deploys Zimbra FOSS from source via Docker — email, calendars and contacts on your own infrastructure, one command, any Linux host.">
-  <meta property="og:title" content="Oasis — Mail Platform">
-  <meta property="og:description" content="Build and deploy Zimbra FOSS from source via Docker — one command, any Linux host.">
+  <title>Loomix — Mail Platform</title>
+  <meta name="description" content="Loomix is the estate's mail platform: the Stalwart engine behind Loomix Mail — email, calendars, contacts and files, with Authentik SSO, Cerulean DNS and TLS, tenant administration, migration and compliance reporting.">
+  <meta property="og:title" content="Loomix — Mail Platform">
+  <meta property="og:description" content="Stalwart mail engine + Loomix Mail client — mail, calendars, contacts and files on your own infrastructure.">
   <meta property="og:type" content="website">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0d10'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle'%3E🌴%3C/text%3E%3C/svg%3E">
+  <meta property="og:site_name" content="Loomix">
+  <meta property="og:image" content="https://innotelinc.github.io/oasis/brand/loomix-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Loomix — Mail Platform">
+  <meta name="twitter:description" content="Email, calendars, contacts and files on your own infrastructure.">
+  <meta name="twitter:image" content="https://innotelinc.github.io/oasis/brand/loomix-og.png">
+  <meta name="theme-color" content="#5f3fe6">
+  <link rel="icon" href="brand/loomix-mark.svg" type="image/svg+xml">
+  <link rel="icon" href="brand/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="brand/apple-touch-icon.png">
   <link rel="stylesheet" href="unity-theme.css">
   <script>window.UNITY_DEFAULT_SCHEME = "operations";</script>
   <script src="unity-theme.js"></script>
@@ -32,7 +43,7 @@
       --ease: cubic-bezier(.2, .8, .2, 1);
     }
 
-    /* ---- Product theme (Oasis landing, modeled on the ONYX outline) ---- */
+    /* ---- Product theme (Loomix landing, modeled on the ONYX outline) ---- */
     
 
     * { box-sizing: border-box; }
@@ -79,11 +90,9 @@
     }
     .brand:hover { color: var(--p-text); }
     .brand .mark {
-      display: grid; place-items: center;
-      width: 26px; height: 26px; border-radius: 8px;
-      background: var(--p-bg-elevated);
-      border: 1px solid var(--p-border);
-      font-size: 15px;
+      display: block;
+      width: 28px; height: 28px; border-radius: 8px;
+      flex: none;
     }
     .brand .dot { color: var(--p-accent); }
     .topbar nav { margin-left: auto; display: flex; align-items: center; gap: 4px; }
@@ -336,8 +345,8 @@
   <header class="topbar">
     <div class="wrap topbar-inner">
       <a class="brand" href="#">
-        <span class="mark" aria-hidden="true">🌴</span>
-        Oasis<span class="dot">.</span>
+        <img class="mark" src="brand/loomix-mark.svg" alt="" width="28" height="28">
+        Loomix<span class="dot">.</span>
       </a>
       <nav aria-label="Main">
         <a href="#features">Features</a>
@@ -358,19 +367,19 @@
     <!-- Hero -->
     <div class="hero">
       <div class="wrap hero-inner">
-        <p class="kicker"><span class="pulse" aria-hidden="true"></span> v0.1.1 · MailOps live</p>
+        <p class="kicker"><span class="pulse" aria-hidden="true"></span> v0.2.0 · MailOps live</p>
         <h1>Email you host,<br>not email that <span class="accent">hosts you</span>.</h1>
-        <p class="lede">Oasis builds Zimbra FOSS from source and deploys it through Docker: email, calendars, contacts and collaboration on your own infrastructure. One command takes a bare Linux host to a working mail platform — with migration presets, health monitoring and compliance reporting.</p>
+        <p class="lede">Loomix pairs Stalwart's mail engine with the Loomix Mail client: email, calendars, contacts and files on your own infrastructure. Authentik identity, Cerulean DNS and certificates, NPM edge — one platform, with tenant administration, migration presets, health monitoring and compliance reporting.</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="https://github.com/innotelinc/oasis#quick-start">Get started</a>
           <a class="btn btn-secondary" href="https://github.com/innotelinc/oasis/tree/master/docs">Docs</a>
         </div>
         <div class="quickstart">
-          <code><span class="c">$</span> git clone https://github.com/innotelinc/oasis.git && cd oasis && cp .env.example .env && ./build.sh</code>
+          <code><span class="c">$</span> git clone https://github.com/innotelinc/oasis.git && cd oasis && cp .env.example .env && ./scripts/setup-oasis.sh</code>
           <button class="copy" id="copy-btn" type="button" aria-label="Copy quick start command">copy</button>
         </div>
         <div class="stats">
-          <div class="stat"><b>Zimbra 10.1.21</b><span>FOSS, built from source</span></div><div class="stat"><b>1 command</b><span>bare host → mail platform</span></div><div class="stat"><b>Mail + Cal</b><span>calendars + contacts</span></div><div class="stat"><b>MIT</b><span>open source, self-hosted</span></div>
+          <div class="stat"><b>Stalwart</b><span>mail engine, one binary</span></div><div class="stat"><b>One client</b><span>mail + calendar + contacts + files</span></div><div class="stat"><b>JMAP native</b><span>SMTP · IMAP · JMAP · Sieve</span></div><div class="stat"><b>MIT</b><span>open source, self-hosted</span></div>
         </div>
       </div>
     </div>
@@ -379,9 +388,9 @@
     <section id="features">
       <div class="wrap">
         <h2>Mail, calendars and collaboration — self-hosted<span class="accent">.</span></h2>
-        <p class="section-sub">A production mail platform built from upstream source, deployable on any Linux host with one command.</p>
+        <p class="section-sub">A complete mail and collaboration platform — the engine, the client, the identity and the trust — self-hosted on your own infrastructure.</p>
         <div class="grid grid-3">
-          <div class="card"><span class="icon" aria-hidden="true">📧</span><h3>Zimbra FOSS from source</h3><p>The full Zimbra build — mail, calendar and contacts servers — reproduced and containerized.</p></div><div class="card"><span class="icon" aria-hidden="true">🚀</span><h3>One-command deploy</h3><p>`./build.sh` takes a bare host to a working mail platform; `setup-oasis.sh` handles lifecycle.</p></div><div class="card"><span class="icon" aria-hidden="true">🛡️</span><h3>Mail security</h3><p>Posture checks with exit codes for cron, `--json` output and dated Markdown compliance reports.</p></div><div class="card"><span class="icon" aria-hidden="true">📦</span><h3>Migration presets</h3><p>imapsync-based migration from Exchange, Google Workspace and Zimbra with per-provider presets.</p></div><div class="card"><span class="icon" aria-hidden="true">🌐</span><h3>Edge + wildcard TLS</h3><p>app/api/auth/mail/files/admin hostnames provisioned in NPM with a wildcard Let's Encrypt cert.</p></div><div class="card"><span class="icon" aria-hidden="true">🩺</span><h3>Health monitoring</h3><p>`oasis-health.sh` checks the whole mail posture — SPF/DKIM/DMARC and service health.</p></div>
+          <div class="card"><span class="icon" aria-hidden="true">📧</span><h3>Stalwart mail engine</h3><p>SMTP, IMAP, JMAP and Sieve, with calendars, contacts and file storage in one Rust service and an embedded store.</p></div><div class="card"><span class="icon" aria-hidden="true">🖥️</span><h3>Loomix Mail client</h3><p>Mail, calendar, contacts and files behind one login, with admin, settings, themes and plugins.</p></div><div class="card"><span class="icon" aria-hidden="true">🔐</span><h3>Authentik identity</h3><p>One OIDC login for mail, admin and the rest of the estate; disable a user and their mail access dies.</p></div><div class="card"><span class="icon" aria-hidden="true">🌐</span><h3>Edge + wildcard TLS</h3><p>app/api/auth/mail/files/admin hostnames provisioned in NPM with a wildcard Let's Encrypt certificate.</p></div><div class="card"><span class="icon" aria-hidden="true">🛡️</span><h3>Mail security</h3><p>MX, SPF, DKIM, DMARC, MTA-STS and TLS-RPT posture with exit codes, `--json` output and dated Markdown reports.</p></div><div class="card"><span class="icon" aria-hidden="true">📦</span><h3>Migration presets</h3><p>imapsync-based moves from Exchange, Google Workspace and Zimbra with per-provider presets.</p></div><div class="card"><span class="icon" aria-hidden="true">🧑‍💼</span><h3>Tenant administration</h3><p>Domains, users and DNS zones from admin.&lt;domain&gt;, wired to Authentik and Stalwart in the same request.</p></div><div class="card"><span class="icon" aria-hidden="true">🩺</span><h3>Health monitoring</h3><p>A daily host/TLS/SSO and mail-posture report, with the current result visible in the admin page.</p></div>
         </div>
       </div>
     </section>
@@ -390,19 +399,18 @@
     <section id="stack">
       <div class="wrap">
         <h2>The Mail layer of the stack<span class="accent">.</span></h2>
-        <p class="section-sub">Oasis consumes Authentik (identity), Cerulean Vault (secrets) and Magnate (revenue).</p>
+        <p class="section-sub">One engine, one client, and the estate's identity and trust behind them.</p>
         <div class="split">
           <div>
             <div class="grid" style="gap:14px">
-              <div class="card"><span class="icon" aria-hidden="true">📧</span><h3>Zimbra core</h3><p>Mailboxes, calendars, contacts and collaboration, built from FOSS source.</p></div><div class="card"><span class="icon" aria-hidden="true">📦</span><h3>Build pipeline</h3><p>Reproducible Docker images tracking the latest Zimbra FOSS release.</p></div><div class="card"><span class="icon" aria-hidden="true">🛡️</span><h3>Mail security</h3><p>Posture checks and compliance reporting.</p></div><div class="card"><span class="icon" aria-hidden="true">📦</span><h3>Migration</h3><p>imapsync presets for Exchange, Google Workspace and Zimbra.</p></div>
+              <div class="card"><span class="icon" aria-hidden="true">📧</span><h3>Stalwart core</h3><p>Mailboxes, calendars, contacts and file storage in one embedded-store engine.</p></div><div class="card"><span class="icon" aria-hidden="true">🖥️</span><h3>Loomix Mail</h3><p>The one client for mail, calendar, contacts, files and admin.</p></div><div class="card"><span class="icon" aria-hidden="true">🔐</span><h3>Authentik identity</h3><p>OIDC SSO for the client and the admin surface, from the estate's identity provider.</p></div><div class="card"><span class="icon" aria-hidden="true">🛡️</span><h3>Cerulean trust</h3><p>Authoritative DNS, DKIM publication and wildcard certificates, all through one bridge.</p></div>
             </div>
           </div>
-          <pre class="terminal"><span class="cmt"># one command: bare host → working mail platform</span>
-$ <span class="p">./build.sh</span>
-<span class="ok">>> [zimbra] building Zimbra 10.1.21 from source (FOSS)</span>
-<span class="ok">>> [compose] mail + cal + contacts up → mail.oasis.innotel.us</span>
-$ <span class="p">scripts/oasis-health.sh</span>
-<span class="ok">SPF ok · DKIM ok · DMARC ok · smtp 25 open · all services healthy</span></pre>
+          <pre class="terminal"><span class="cmt"># one platform: engine, client, identity, trust</span>
+$ <span class="p">./scripts/oasis-health.sh --report</span>
+<span class="ok">18/18 hosts · MX ok · SPF ok · DKIM ok · DMARC ok · MTA-STS ok</span>
+$ <span class="p">python3 scripts/oasis-mail-admin.py</span>
+<span class="ok">domains · users · DKIM · Cerulean zones · Authentik accounts</span></pre>
         </div>
       </div>
     </section>
@@ -413,7 +421,7 @@ $ <span class="p">scripts/oasis-health.sh</span>
         <h2>Every mail surface, one deploy<span class="accent">.</span></h2>
         <p class="section-sub">Edge hostnames provisioned automatically in Nginx Proxy Manager with a wildcard certificate.</p>
         <div class="surfaces">
-          <a class="surface" href="https://app.oasis.innotel.us"><b>App</b><small>app.oasis.innotel.us · webmail + admin UI</small><span class="live">live</span></a><a class="surface" href="https://api.oasis.innotel.us"><b>API</b><small>api.oasis.innotel.us · REST API</small><span class="live">live</span></a><a class="surface" href="https://auth.oasis.innotel.us"><b>Identity</b><small>auth.oasis.innotel.us · Authentik SSO</small><span class="live">live</span></a><a class="surface" href="https://mail.oasis.innotel.us"><b>Mail</b><small>mail.oasis.innotel.us · Zimbra mailboxes</small><span class="live">live</span></a><a class="surface" href="https://files.oasis.innotel.us"><b>Files</b><small>files.oasis.innotel.us · briefcase / files</small><span class="live">live</span></a><a class="surface" href="https://admin.oasis.innotel.us"><b>Admin</b><small>admin.oasis.innotel.us · NPM admin</small><span class="live">live</span></a>
+          <a class="surface" href="https://loomix.art"><b>Loomix</b><small>loomix.art · loomix.lol · Loomix Mail</small><span class="live">live</span></a><a class="surface" href="https://mail.loomix.art/jmap/session"><b>Mail</b><small>mail.loomix.art · JMAP · autodiscover · MTA-STS</small><span class="live">live</span></a><a class="surface" href="https://app.oasis.innotel.us"><b>App</b><small>app.oasis.innotel.us · webmail · calendar · contacts · files</small><span class="live">live</span></a><a class="surface" href="https://api.oasis.innotel.us"><b>API</b><small>api.oasis.innotel.us · JMAP + REST</small><span class="live">live</span></a><a class="surface" href="https://auth.oasis.innotel.us"><b>Identity</b><small>auth.oasis.innotel.us · Authentik SSO</small><span class="live">live</span></a><a class="surface" href="https://mail.oasis.innotel.us"><b>Mail</b><small>mail.oasis.innotel.us · JMAP · SMTP · IMAP</small><span class="live">live</span></a><a class="surface" href="https://files.oasis.innotel.us"><b>Files</b><small>files.oasis.innotel.us · Stalwart file storage</small><span class="live">live</span></a><a class="surface" href="https://admin.oasis.innotel.us"><b>Admin</b><small>admin.oasis.innotel.us · domains · users · health</small><span class="live">live</span></a>
         </div>
       </div>
     </section>
@@ -422,9 +430,9 @@ $ <span class="p">scripts/oasis-health.sh</span>
     <section id="roadmap">
       <div class="wrap">
         <h2>Roadmap<span class="accent">.</span></h2>
-        <p class="section-sub">Shipped as v0.1.1; administration and automation modules are delivered incrementally.</p>
+        <p class="section-sub">Shipped as v0.2.0; LTS hardening is next.</p>
         <div class="roadmap">
-          <div class="mile"><span class="tag">v0.1.1 <em>"MailOps"</em></span><p>Zimbra FOSS build + deploy, migration presets, health monitoring.</p><span class="state done">done</span></div><div class="mile"><span class="tag">v0.2.0 <em>"Administration"</em></span><p>Admin and automation modules delivered incrementally.</p><span class="state next">next</span></div><div class="mile"><span class="tag">v1.0 <em>"LTS"</em></span><p>Security audit, hardening, LTS channel.</p><span class="state later">later</span></div>
+          <div class="mile"><span class="tag">v0.2.0 <em>"MailOps"</em></span><p>Stalwart engine + Loomix Mail client, tenant admin, edge and wildcard TLS, health and compliance reporting.</p><span class="state done">done</span></div><div class="mile"><span class="tag">v1.0 <em>"LTS"</em></span><p>Security audit, hardening, LTS channel.</p><span class="state next">next</span></div>
         </div>
       </div>
     </section>
@@ -432,7 +440,7 @@ $ <span class="p">scripts/oasis-health.sh</span>
 
   <footer>
     <div class="wrap foot-inner">
-      <span>Oasis — Mail Platform · MIT License</span>
+      <span>Loomix — Mail Platform · MIT License</span>
       <span class="foot-links">
         <a href="https://github.com/innotelinc/oasis">GitHub</a>
         <a href="https://innotelinc.github.io/oasis">Pages</a>
@@ -440,13 +448,13 @@ $ <span class="p">scripts/oasis-health.sh</span>
         <a href="https://github.com/innotelinc/oasis/releases">Releases</a>
       </span>
     </div>
-    <p class="foot-credits wrap">Innotel Platform — <a href="https://innotelinc.github.io/cerulean/">Cerulean</a> (Trust) · <a href="https://innotelinc.github.io/onyx/">ONYX</a> (Storage) · <a href="https://innotelinc.github.io/magnate/">Magnate</a> (Revenue) · <a href="https://github.com/innotelinc/npm">NPM Edge</a> · <a href="https://innotelinc.github.io/monarch/">Monarch</a> (MediaOps) · <a href="https://innotelinc.github.io/zeus/">Zeus</a> (VoiceOps) · Oasis (MailOps) · <a href="https://innotelinc.github.io/signara/">Signara</a> (DocumentOps) · <a href="https://innotelinc.github.io/rizzaura/">Rizz Aura</a> (CommunityOps) · <a href="https://innotelinc.github.io/capstone/">Capstone</a> (AgentOps) · <a href="https://innotelinc.github.io/zapit/">Zapit</a> (TransferOps) · <a href="https://innotelinc.github.io/atheniq/">AthenIQ</a> (LearningOps) · <a href="https://innotelinc.github.io/distro/">Distro</a> (BuilderOps) · <a href="https://innotelinc.github.io/plutus/">PLUTUS</a> (VideoOps)</p>
+    <p class="foot-credits wrap">Innotel Platform — <a href="https://innotelinc.github.io/cerulean/">Cerulean</a> (Trust) · <a href="https://innotelinc.github.io/onyx/">ONYX</a> (Storage) · <a href="https://innotelinc.github.io/magnate/">Magnate</a> (Revenue) · <a href="https://github.com/innotelinc/npm">NPM Edge</a> · <a href="https://innotelinc.github.io/monarch/">Monarch</a> (MediaOps) · <a href="https://innotelinc.github.io/zeus/">Zeus</a> (VoiceOps) · Loomix (MailOps) · <a href="https://innotelinc.github.io/signara/">Signara</a> (DocumentOps) · <a href="https://innotelinc.github.io/rizzaura/">Rizz Aura</a> (CommunityOps) · <a href="https://innotelinc.github.io/capstone/">Capstone</a> (AgentOps) · <a href="https://innotelinc.github.io/zapit/">Zapit</a> (TransferOps) · <a href="https://innotelinc.github.io/atheniq/">AthenIQ</a> (LearningOps) · <a href="https://innotelinc.github.io/distro/">Distro</a> (BuilderOps) · <a href="https://innotelinc.github.io/plutus/">PLUTUS</a> (VideoOps)</p>
   </footer>
 
   <script>
     // Copy-to-clipboard for the quick-start one-liner (progressive enhancement).
     document.getElementById('copy-btn').addEventListener('click', function () {
-      var cmd = 'git clone https://github.com/innotelinc/oasis.git && cd oasis && cp .env.example .env && ./build.sh';
+      var cmd = 'git clone https://github.com/innotelinc/oasis.git && cd oasis && cp .env.example .env && ./scripts/setup-oasis.sh';
       var self = this;
       function done() {
         self.textContent = 'copied';

@@ -1,9 +1,9 @@
-# Migrating to Oasis
+# Migrating to Loomix
 
-Oasis replaces Zimbra-class deployments, so existing mailboxes most often come
+Loomix replaces Zimbra-class deployments, so existing mailboxes most often come
 from Microsoft Exchange (including Microsoft 365), Google Workspace, or another
 Zimbra server. This guide covers moving mailboxes (IMAP) and related data
-(calendar, contacts) onto the Oasis mail server with minimal downtime.
+(calendar, contacts) onto the Loomix mail server with minimal downtime.
 
 ## Overview
 
@@ -13,7 +13,7 @@ Zimbra server. This guide covers moving mailboxes (IMAP) and related data
 | Calendar | Exchange/Google export (`.ics`), Google Takeout, Zimbra export, then import into the target webmail calendar |
 | Contacts | Exchange/Google export (`.vcf` / `.csv`), Google Takeout, Zimbra export, then import |
 | Files | FTP/WebDAV/Drive-style exports, or Zimbra Briefcase export |
-| Aliases, distribution lists, forwarding | Recreate on Oasis via the Zimbra admin or `zmprov` |
+| Aliases, distribution lists, forwarding | Recreate on Loomix via the Zimbra admin or `zmprov` |
 
 The mailbox utility below handles the email migration. Calendar, contacts, and
 files are exported from each provider and imported into the target mailbox;
@@ -22,7 +22,7 @@ the provider sections.
 
 ## General cutover flow
 
-1. **Provision target mailboxes** on the Oasis mail server before migrating so
+1. **Provision target mailboxes** on the Loomix mail server before migrating so
    IMAP login succeeds (`zmprov ca user@domain password`, or via the admin UI).
 2. **Enable IMAP** on the source system (see provider notes below).
 3. **Run the migration** per mailbox, or script it over a user list. First run
@@ -30,7 +30,7 @@ the provider sections.
    cutover.
 4. **Verify** folder trees and mail counts on the target (IMAP client or
    webmail).
-5. **Switch MX** records for the domain to the Oasis server once sync is
+5. **Switch MX** records for the domain to the Loomix server once sync is
    complete. Migrate calendars/contacts at the same time.
 6. **Keep the old server in read-only mode** for 30+ days as a fallback, then
    decommission.
@@ -111,7 +111,7 @@ OAuth-token based method if the provider requires it (see Google below).
   IMAP sync, which imapsync handles well including folder naming.
 - Zimbra-specific bulk export (mailbox `tgz` export) is available through the
   Zimbra admin console and `zmmailbox`. For very large sites, exporting a
-  mailbox TGZ and importing it on Oasis avoids re-uploading every message over
+  mailbox TGZ and importing it on Loomix avoids re-uploading every message over
   IMAP.
 - Calendar/contacts live in Zimbra's Webmail; export them via the Webmail
   preferences before decommissioning.

@@ -1,4 +1,4 @@
-# Oasis systemd lifecycle
+# Loomix systemd lifecycle
 
 The systemd units are intended for a single-node Linux deployment where Docker
 Compose runs from `/opt/oasis`.

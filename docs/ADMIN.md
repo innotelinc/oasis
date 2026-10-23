@@ -1,4 +1,4 @@
-# Oasis mail administration
+# Loomix mail administration
 
 Add and remove mail **domains** and **users** from one page, with every user
 created in both planes at once. The service is `scripts/oasis-mail-admin.py`; the
@@ -52,6 +52,7 @@ environment; sessions are HMAC-signed cookies with a CSRF token on every write.
 | `GET /auth/login`, `GET /auth/callback` | the OIDC flow |
 | `GET /auth/logout` | clear the session |
 | `GET /api/state` | JSON: domains and users |
+| `GET /api/posture` | JSON: latest host/TLS/SSO report and mail posture, with a `stale` flag |
 | `POST /api/domains` | `{action: add\|remove\|zone\|publish, name, description?}` |
 | `POST /api/users` | `{action: add\|remove, email, name?, groups?}` |
 | `POST /api/users/password` | `{email}` — rotate the Authentik password (returned once) |
@@ -60,6 +61,26 @@ Adding a user generates a password and returns it once; adding a domain returns
 what it did (zone, delegation, records) and the few follow-ups that are not DNS
 writes here (MX, and the registrar step for a new apex). `remove` also deletes the
 name's Cerulean zone and its delegation, not just the Stalwart record.
+
+### Platform health
+
+The first section of the page is the last posture run, not a live probe. The
+daily `oasis-health.service` timer writes two artifacts and the page reads them:
+
+| Artifact | Written by | Covers |
+| --- | --- | --- |
+| `/opt/oasis/reports/oasis-compliance-<stamp>.md` | `oasis-health.sh --report` | DNS, TLS chain/expiry and HTTPS for every surface |
+| `/var/lib/oasis/mail-posture.json` | `oasis-mail-health.py` | MX, SPF, DMARC, every DKIM selector, MTA-STS and TLS-RPT for each Stalwart domain |
+
+`GET /api/posture` returns the newest report's counts and rows, the mail posture,
+and `stale: true` when neither file is newer than 36 hours (so a stopped timer is
+visible instead of silently showing yesterday's green board). The paths and the
+staleness window are configurable with `OASIS_REPORT_DIR`,
+`OASIS_POSTURE_FILE` and `OASIS_HEALTH_STALE_SECONDS`.
+
+Keeping the page read-only is deliberate: the admin process is one Python thread
+and running a full DNS/TLS sweep inside a request would stall every other
+operator. The timer owns the probing; the page owns the display.
 
 ### Zones and DNS
 
@@ -116,14 +137,14 @@ Cerulean itself could not create the zone.
    systemctl daemon-reload && systemctl enable --now oasis-mail-admin
    ```
 
-   This file and its companion scripts describe the **Oasis mail stack as shipped
-   in this repo** — Compose, Zimbra, npm-proxy-hosts, `local|production` setup
-   modes, and `scripts/setup-oasis.sh`. The estate this machine actually runs is
-   **Stalwart on the host**, configured by `recon/cerulean.py` and
-   `/opt/oasis/scripts/setup-oasis.sh`; the environment template
+   This file and its companion scripts describe the **merged Loomix platform**:
+   **Stalwart on the host**, **Loomix Mail** as the client, Cerulean for DNS and
+   certificates, Authentik for identity. The environment template
    `scripts/oasis-mail-admin.env.example` (and the operations in this script) are
-   written for that estate, which is why they read `STALWART_ENV` and
-   `PROTECTED_ZONES` rather than any Compose/Zimbra settings.
+   written for that platform, which is why they read `STALWART_ENV` and
+   `PROTECTED_ZONES`. The Compose stack, `local|production` setup modes and the
+   Zimbra builder in this repo belong to the retired v0.1 line, not to this
+   deployment.
 
 2. Publish the name through the edge (NPM) and point DNS at the edge — the
    redirect URI is `https://admin.oasis.innotel.us/auth/callback`, so the host

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Loomix">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="0.55" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="120" fill="url(#g)"/>
+  <circle cx="256" cy="206" r="112" fill="#ffffff" opacity="0.10"/>
+  <path d="M258 382 C250 336 254 296 276 254" stroke="#ffffff" stroke-width="26"
+        stroke-linecap="round" fill="none"/>
+  <path d="M276 250 C322 232 374 236 408 262 C366 280 318 278 276 258 Z" fill="#ffffff"/>
+  <path d="M276 250 C230 232 178 236 144 262 C186 280 234 278 276 258 Z" fill="#ffffff"/>
+  <path d="M278 246 C316 204 362 186 402 192 C378 226 334 246 282 252 Z" fill="#ffffff"/>
+  <path d="M278 246 C240 204 194 186 154 192 C178 226 222 246 274 252 Z" fill="#ffffff"/>
+  <path d="M282 242 C288 192 304 152 332 126 C340 170 322 216 290 246 Z" fill="#ffffff"/>
+  <path d="M274 242 C268 192 252 152 224 126 C216 170 234 216 266 246 Z" fill="#ffffff"/>
+  <circle cx="266" cy="266" r="7" fill="#ffffff" opacity="0.9"/>
+  <circle cx="286" cy="264" r="7" fill="#ffffff" opacity="0.9"/>
+  <path d="M88 390 Q172 362 256 390 T424 390" stroke="#ffffff" stroke-width="18"
+        stroke-linecap="round" fill="none"/>
+  <path d="M124 436 Q190 414 256 436 T388 436" stroke="#ffffff" stroke-width="12"
+        stroke-linecap="round" fill="none" opacity="0.5"/>
+</svg>

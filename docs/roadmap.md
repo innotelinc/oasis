@@ -1,19 +1,20 @@
-# Oasis — direction and roadmap
+# Loomix — direction and roadmap
 
-Oasis is the estate's **MailOps** platform: email, calendars, contacts and team
+Loomix is the estate's **MailOps** platform: email, calendars, contacts and team
 communication. This page records where the codebase is, the decision to move off
 Zimbra, how the three candidate systems compare, what we borrow from each, and the
 order we do it in.
 
 ## Where the codebase is now
 
-The shipped foundation builds and deploys **Zimbra FOSS from source** in Docker and
-wires Authentik SSO, NPM edge routing, wildcard certificates, health/compliance
-reporting and mailbox migration around it (see [CHANGELOG.md](../CHANGELOG.md)).
-The mail service itself is Zimbra; everything else in this repo is the platform
-around it.
+Loomix v0.2.0 ships the merged platform: **Stalwart** is the mail engine and
+**Loomix Mail** the client, with Authentik identity, Cerulean DNS/TLS, tenant
+administration, edge hostnames, migration presets and health/compliance reporting
+(see [CHANGELOG.md](../CHANGELOG.md)). The v0.1 line's Zimbra builder (`build.sh`,
+`Dockerfile`, `scripts/install-oasis.sh`) is retired and kept only for
+reproducible builds of that older line; it is not deployed.
 
-## Why we are moving off Zimbra
+## Why we moved off Zimbra
 
 Zimbra is a large **Java** stack (JVM mailboxd + Jetty + Lucene + MariaDB/OpenLDAP)
 that ships as a monolithic `zcs-*.tgz` installer. In practice it is:
@@ -49,7 +50,7 @@ that we want is its *feature model*, not its runtime.
 
 ## Decision
 
-**Oasis is the mail *platform*, not a new mail engine.** We do not write our own
+**Loomix is the mail *platform*, not a new mail engine.** We do not write our own
 SMTP/IMAP/JMAP server — correctness, deliverability and security there are a
 decade of work — and we do not adopt Forward Email's service topology.
 
@@ -66,7 +67,7 @@ DB) while still reaching the feature set people judge a mail platform on.
 
 ## What we take from Forward Email
 
-| Feature | What it gives users | How Oasis gets it |
+| Feature | What it gives users | How Loomix gets it |
 | --- | --- | --- |
 | Encrypted mailbox at rest | mail readable only by the mailbox owner | Stalwart store encryption / per-account at-rest encryption review |
 | Aliases & forwarding rules | one inbox, many addresses; forward without a mailbox | Stalwart aliases + Group addresses + sieve rules |
@@ -91,7 +92,7 @@ we should say which is which wherever a domain is added:
 carries Signara's outbound mail only: the sender mailbox is
 `signara-alerts@signara.innotel.us` and the platform's From is
 `no-reply@signara.innotel.us` (`SMTP_HELLO=signara.innotel.us` in Signara's config).
-It consumes Oasis as transport and does not own mail; its SPF now names the estate
+It consumes Loomix as transport and does not own mail; its SPF now names the estate
 relay (`include:spf.mailjet.com`) because outbound leaves through it, not from the
 server's own IP. Every future sending domain is added the same way and marked as
 such, so "why does this platform have a mail domain?" always has an answer.
