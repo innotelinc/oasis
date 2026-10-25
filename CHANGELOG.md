@@ -15,6 +15,19 @@ All notable changes to Loomix are documented here.
 
 ### Added
 
+- **Twelve new mail domains**, each a Cerulean zone and a Stalwart domain:
+  `telno.services`, `telno.mobi`, `telno.tel`, `telno.online`, `innotel.tech`,
+  `denovo.credit`, `telno.digital`, `telno.directory`, `num.directory`,
+  `number.directory`, `orion.locker`, `telno.network`. Every zone carries the
+  house record set (apex `A`, in-zone `NS ns1`/`ns2` with their own `A`, `MX 10
+  mail.innotel.us`, SPF with the relay include, DMARC, CAA) plus the records
+  Stalwart renders (ed25519 and RSA DKIM, SRV autodiscovery, MTA-STS, TLS-RPT,
+  client autoconfiguration), published through Cerulean. `MX`, `autoconfig` and
+  `autodiscover` name `mail.innotel.us` rather than a per-zone `mail.<zone>`,
+  because that is the name the mail host's certificate covers; the apexes still
+  need their **registrar** nameservers moved off the registrar's parking service
+  (`ns1.<zone>` + `ns2.<zone>`, or the estate's `ns1.innotel.us` +
+  `ns2.innotel.us`), which no API here can do.
 - **Mail administration page** (`scripts/oasis-mail-admin.py`, `systemd/oasis-mail-admin.service`) — add and remove mail domains and users from one surface. A user is created in Authentik (with the right groups and a password) and as the matching Stalwart mailbox in the same request; a domain is created in Stalwart with automatic DKIM, and its generated DKIM/SPF/DMARC records are published to the estate resolver through Cerulean (Stalwart's own publisher is off). Adding a domain also mints its authoritative DNS zone **through Cerulean** (the estate's TrustOps platform and the only Technitium writer) before publishing, with a standalone **Create zone** action for domains added earlier; `scripts/cerulean/cerulean.py` gained `ensure_zone()` for the bridge's `POST /service/domains`. Publishing is still guarded: nothing is written into a zone the resolver does not serve, so the service never mints a private zone DNS would not delegate to. It is OIDC-native against Cerulean Authentik using the existing `oasis-admin` client, gated to a configurable Authentik group, with a CSRF token on every write. Documented in `docs/ADMIN.md`; configuration template in `scripts/oasis-mail-admin.env.example`.
 - `scripts/oasis-mail-admin.py` — **domain delegation and teardown**. Adding a domain delegates it: a name inside a domain the estate already serves has its NS records written into the parent zone through Cerulean (and removed again on delete), so no manual step is needed for the common case; a brand-new apex gets the registrar step reported with the exact nameservers (`PUBLIC_NS`), since no registrar API exists in the estate. Removing a domain now unregisters its zone through Cerulean (`DELETE /api/service/domains`, added to the bridge) so the zone, its records and its delegation do not outlive the domain. Cerulean refuses the estate's own platform zones; `PROTECTED_ZONES` (default `innotel.us`) refuses them here too.
 - `scripts/oasis-mail-user.py passwd` — rotate a mailbox's Authentik password and write it to a `600` credential file, backing up the previous one.
