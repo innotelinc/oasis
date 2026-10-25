@@ -191,7 +191,7 @@ The repo still carries the historical Zimbra builder (`build.sh`, `Dockerfile`,
 platform path, is not deployed in the estate, and is kept only for reproducible
 builds of that older line.
 
-## Licensing
+## License
 
 Loomix is released under the [MIT License](LICENSE). Stalwart is AGPL-3.0,
 Loomix Mail is AGPL-3.0 (a fork of Bulwark Webmail), imapsync and the other dependencies retain
