@@ -88,14 +88,23 @@ we should say which is which wherever a domain is added:
   mail with its own SPF/DKIM/DMARC and reputation. It has one sender mailbox (or an
   app credential) and no user inboxes.
 
-**Signara** is the estate's first declared sending domain. `signara.innotel.us`
-carries Signara's outbound mail only: the sender mailbox is
-`signara-alerts@signara.innotel.us` and the platform's From is
-`no-reply@signara.innotel.us` (`SMTP_HELLO=signara.innotel.us` in Signara's config).
-It consumes Loomix as transport and does not own mail; its SPF now names the estate
-relay (`include:spf.mailjet.com`) because outbound leaves through it, not from the
-server's own IP. Every future sending domain is added the same way and marked as
-such, so "why does this platform have a mail domain?" always has an answer.
+**Signara** was the estate's first declared sending domain, and is now the example of
+why sending domains get declared rather than assumed: on 2026-10-27 `signara.innotel.us`
+was retired as a mail domain. Signara sends as `alertmanager@innotel.us` (its From is
+`Signara Alerts <alertmanager@innotel.us>`, `SMTP_HELLO=innotel.us`), so its mail is
+signed, routed and reported with the mailbox domain's own SPF/DKIM/DMARC and reputation
+— one domain to keep deliverable instead of two. The remaining sender account,
+`signara-alerts@signara.innotel.us`, was moved to `signara-alerts@innotel.us`; the
+domain itself, its Stalwart mail domain, its Mailjet sender and parseroute, and its
+MX/SPF/DKIM/DMARC/MTA-STS/autoconfig records are gone. `signara.innotel.us` is now a
+web-only zone (`app`, `api`, `auth`, `admin`, `storage`, `subscribe`).
+
+A product that genuinely needs its own mail domain still gets one, marked as a sending
+domain here, so "why does this platform have a mail domain?" always has an answer — and
+when the answer stops being true, this is the procedure that removes it. The inbound
+check enforces the result: `signara.innotel.us` is in its `RETIRED_DOMAINS`, so a
+domain that comes back into `LOCAL_DOMAINS`, or starts publishing MX again, fails the
+next run instead of quietly accepting mail nobody reads.
 
 ## Phases
 

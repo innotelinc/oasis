@@ -6,6 +6,20 @@ All notable changes to Loomix are documented here.
 
 ### Changed
 
+- **`signara.innotel.us` retired as a mail domain.** Signara sends as
+  `alertmanager@innotel.us` (From `Signara Alerts <alertmanager@innotel.us>`,
+  `SMTP_HELLO=innotel.us`), so the separate sending domain earns nothing: its mail
+  is now signed, routed and reported with `innotel.us`'s own SPF/DKIM/DMARC and
+  reputation. The one account on the domain (`signara-alerts@signara.innotel.us`)
+  moved to `signara-alerts@innotel.us` keeping its mailbox and credential; the
+  Stalwart domain and its DKIM keys, the Mailjet `*@signara.innotel.us` sender and
+  its catch-all parseroute, the receiver's `LOCAL_DOMAINS` and the check's
+  `MX_DOMAINS` entries, and the domain's MX/SPF/DMARC/MTA-STS/TLS-RPT/autoconfig
+  records are gone. The zone itself stays — it is the Signara platform's web zone,
+  so its eight `A` records were left alone. `docs/roadmap.md` and
+  `MAILJET-MIGRATION.md` record the procedure, including the guard that now catches
+  a half-done retirement and the six inert Stalwart autodiscovery SRVs still in the
+  zone, which needed a Cerulean fix (under Fixed) that is not deployed yet.
 - **Loomix Mail rebrand.** The client is now **Loomix Mail** everywhere: the new palm-and-water mark (indigo → violet), wordmark, favicon, PWA icons and 1200×630 share card, shipped in `web/landing/brand/` and in the client at `public/branding/Loomix_*`. The webmail image moves to `1.17.0`, sets `APP_NAME=Loomix Mail`, and every user-facing default (login, tab title, About, setup wizard, manifest, share card) reads Loomix. Stalwart keeps the mail; its hosted-domain logos now carry the Loomix mark too.
 - **Loomix is the new product name for the platform formerly called Oasis.** The
   repository, operator scripts, systemd units and existing `oasis.<domain>`
@@ -15,6 +29,12 @@ All notable changes to Loomix are documented here.
 
 ### Added
 
+- **Retired-mail-domain guard in `mailjet-inbound-check.py`** — `RETIRED_DOMAINS`
+  names what has left inbound mail, and the check fails while a listed domain still
+  publishes `MX` or is still named in `MX_DOMAINS` or the receiver's
+  `LOCAL_DOMAINS`. Each half of a half-done retirement looks healthy on its own,
+  which is the point: a leftover MX keeps delivering into a mailbox nobody reads,
+  and a leftover list entry revives the domain the day its MX comes back.
 - **Twelve new mail domains**, each a Cerulean zone and a Stalwart domain:
   `telno.services`, `telno.mobi`, `telno.tel`, `telno.online`, `innotel.tech`,
   `denovo.credit`, `telno.digital`, `telno.directory`, `num.directory`,
@@ -36,6 +56,15 @@ All notable changes to Loomix are documented here.
 
 ### Fixed
 
+- **Cerulean can delete `SRV`, `CAA` and `PTR` records**
+  (`server/src/services/technitium.ts`): `recordValueForDelete()` had no SRV branch
+  and sent `text` for CAA/PTR, where Technitium validates
+  `priority`/`weight`/`port`/`target`, `flags`/`tag`/`value` and `ptrName` — so
+  those deletes failed (`Parameter 'priority' missing`) and the records stayed. Each
+  now sends its own RDATA (priority `0` included, which the query builder must not
+  drop as empty) and refuses a value that does not carry it instead of guessing one;
+  pinned in `server/tests/technitium.test.ts`. Pending deploy while the Cerulean
+  host moves from i4 to i2.
 - `scripts/oasis-health.sh --quiet` aborted at the first PASS (exit 1, no summary) because `[ "$QUIET" = false ] && printf …` is the function's return value under `set -e`. The print is now guarded by an `if`, so a quiet run completes with the correct exit code.
 
 - `scripts/oasis-mail-user.py` resolved Authentik groups to a list of **names**, but Authentik's write API requires group **PKs**; `add` would fail to set groups. It now resolves names to PKs through one helper, and reports a clear error for a group that does not exist.
