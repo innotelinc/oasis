@@ -18,8 +18,9 @@ All notable changes to Loomix are documented here.
   records are gone. The zone itself stays — it is the Signara platform's web zone,
   so its eight `A` records were left alone. `docs/roadmap.md` and
   `MAILJET-MIGRATION.md` record the procedure, including the guard that now catches
-  a half-done retirement and the six inert Stalwart autodiscovery SRVs still in the
-  zone, which needed a Cerulean fix (under Fixed) that is not deployed yet.
+  a half-done retirement and the six inert Stalwart autodiscovery SRVs, which needed
+  a Cerulean fix (under Fixed) before they could be removed — it is deployed on the
+  i4 edge now and all six are gone, leaving the zone's `A`, `NS` and `SOA`.
 - **Loomix Mail rebrand.** The client is now **Loomix Mail** everywhere: the new palm-and-water mark (indigo → violet), wordmark, favicon, PWA icons and 1200×630 share card, shipped in `web/landing/brand/` and in the client at `public/branding/Loomix_*`. The webmail image moves to `1.17.0`, sets `APP_NAME=Loomix Mail`, and every user-facing default (login, tab title, About, setup wizard, manifest, share card) reads Loomix. Stalwart keeps the mail; its hosted-domain logos now carry the Loomix mark too.
 - **Loomix is the new product name for the platform formerly called Oasis.** The
   repository, operator scripts, systemd units and existing `oasis.<domain>`
@@ -63,8 +64,10 @@ All notable changes to Loomix are documented here.
   those deletes failed (`Parameter 'priority' missing`) and the records stayed. Each
   now sends its own RDATA (priority `0` included, which the query builder must not
   drop as empty) and refuses a value that does not carry it instead of guessing one;
-  pinned in `server/tests/technitium.test.ts`. Pending deploy while the Cerulean
-  host moves from i4 to i2.
+  pinned in `server/tests/technitium.test.ts`. Deployed on the i4 edge on
+  2026-10-27 (image built from the edge's own tree, `cerulean-cerulean:pre-srv-fix`
+  kept as the rollback tag), which is what let the six leftover
+  `signara.innotel.us` SRVs be removed.
 - `scripts/oasis-health.sh --quiet` aborted at the first PASS (exit 1, no summary) because `[ "$QUIET" = false ] && printf …` is the function's return value under `set -e`. The print is now guarded by an `if`, so a quiet run completes with the correct exit code.
 
 - `scripts/oasis-mail-user.py` resolved Authentik groups to a list of **names**, but Authentik's write API requires group **PKs**; `add` would fail to set groups. It now resolves names to PKs through one helper, and reports a clear error for a group that does not exist.
