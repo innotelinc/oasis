@@ -1,0 +1,41 @@
+# Loomix Mail (the webmail client) as the mail host runs it.
+#
+# Installed at /opt/bulwark/docker-compose.yml inside the `mail` container, next
+# to Stalwart. The image is a commit tag, never `latest`: the updater resolves
+# `:latest` once, pins the tag it names, and a rollback can then name a build.
+# `scripts/upgrade-webmail.sh` reads and writes the pin in ../webmail.version.
+#
+# The environment file stays on the host and is never in this repo.
+services:
+  bulwark:
+    image: ${OASIS_MAIL_IMAGE:-ghcr.io/innotelinc/webmail-release:sha-2f1fd5f}
+    container_name: bulwark
+    environment:
+      # Node refuses a request whose headers exceed 16 KiB - its default
+      # --max-http-header-size - with a 431. The webmail keeps one token per
+      # account slot and an id token is a JWT, so a browser signed into a few
+      # accounts sends a Cookie header past that cap and every request fails
+      # before the app sees it. Nginx is raised to 32k to match.
+      - NODE_OPTIONS=--max-http-header-size=65536
+    env_file:
+      - .env.local
+    ports:
+      - "3000:3000"
+    volumes:
+      - bulwark-settings:/app/data/settings
+      - bulwark-config:/app/data/admin
+      - bulwark-state:/app/data/admin-state
+      - bulwark-telemetry:/app/data/telemetry
+    healthcheck:
+      test: ["CMD","wget","--no-verbose","--tries=1","--spider","http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  bulwark-settings:
+  bulwark-config:
+  bulwark-state:
+  bulwark-telemetry:
