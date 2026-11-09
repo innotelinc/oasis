@@ -1,0 +1,216 @@
+name: "Docker: Branch image"
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "app/**"
+      - "components/**"
+      - "contexts/**"
+      - "hooks/**"
+      - "lib/**"
+      - "stores/**"
+      - "locales/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/healthcheck.mjs"
+      - "scripts/sourcemaps.mjs"
+      - "scripts/upload-sourcemaps.sh"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+
+# Jobs that need more (the registry push, the attestation) say so themselves.
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      image_name: ${{ steps.set.outputs.image_name }}
+      mirror_image_name: ${{ steps.set.outputs.mirror_image_name }}
+    steps:
+      - name: Set image name
+        id: set
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$REF_NAME" = "main" ]; then
+            # main is the deployment line, so its build goes to the release
+            # image name that hosts pull and roll back to. The build job has to
+            # be the first writer of that package: GHCR only lets GITHUB_TOKEN
+            # write packages its own builds created, and a package created by a
+            # mirror instead is refused (403 on manifest PUT).
+            echo "image_name=ghcr.io/${REPOSITORY}-release" >> "$GITHUB_OUTPUT"
+            # Edge users keep following -beta, which is only ever a mirror.
+            echo "mirror_image_name=ghcr.io/${REPOSITORY}-beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_name=ghcr.io/${REPOSITORY}-${REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build (${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }})
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ needs.prepare.outputs.image_name }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            BULWARK_BUILD_SEED=${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+            BULWARK_SOURCE_MAPS=1
+          outputs: type=image,name=${{ needs.prepare.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      # The same build again, a cache hit on this builder, for the stage that
+      # holds only the source maps (Dockerfile, "sourcemaps"); the image never
+      # has them. Both platforms build identical chunks, so amd64 uploads.
+      # https://bulwarkmail.org/docs/deployment/monitoring
+      - name: Export source maps
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          target: sourcemaps
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            BULWARK_BUILD_SEED=${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+            BULWARK_SOURCE_MAPS=1
+          outputs: type=local,dest=sourcemaps
+          cache-from: type=gha,scope=${{ matrix.platform }}
+
+      - name: Upload source maps to Bugsink
+        if: matrix.platform == 'linux/amd64'
+        env:
+          BUGSINK_AUTH_TOKEN: ${{ secrets.BUGSINK_AUTH_TOKEN }}
+        run: bash scripts/upload-sourcemaps.sh sourcemaps
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifest
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ needs.prepare.outputs.image_name }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ needs.prepare.outputs.image_name }}@sha256:%s ' *)
+
+      # Edge users follow -beta; it carries exactly what main just built.
+      # Promotion by tag, so nothing is rebuilt and the digests are identical.
+      - name: Mirror to the edge image name
+        if: needs.prepare.outputs.mirror_image_name != ''
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t "${{ needs.prepare.outputs.mirror_image_name }}:latest" \
+            -t "${{ needs.prepare.outputs.mirror_image_name }}:sha-${GITHUB_SHA::7}" \
+            $(printf '${{ needs.prepare.outputs.image_name }}@sha256:%s ' *)
+
+      - name: Inspect image
+        id: inspect
+        run: |
+          docker buildx imagetools inspect ${{ needs.prepare.outputs.image_name }}:${{ steps.meta.outputs.version }}
+          digest=$(docker buildx imagetools inspect ${{ needs.prepare.outputs.image_name }}:${{ steps.meta.outputs.version }} --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Signed build provenance, pushed to GHCR next to the image:
+      # `gh attestation verify oci://<image>:<tag> --owner bulwarkmail`.
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ needs.prepare.outputs.image_name }}
+          subject-digest: ${{ steps.inspect.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false

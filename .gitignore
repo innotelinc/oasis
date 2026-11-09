@@ -27,3 +27,10 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# The webmail client's build output (imported from innotelinc/webmail)
+webmail/node_modules/
+webmail/.next/
+webmail/out/
+webmail/coverage/
+webmail/.env.local

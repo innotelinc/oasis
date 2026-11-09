@@ -1,0 +1,420 @@
+"use client";
+
+import { useMemo } from 'react';
+import { useTranslations } from 'next-intl';
+import { Check, Folder } from '@/components/icons';
+import { useSettingsStore, effectiveMailLayout, type ToolbarPosition, type MailLayout, type InterfaceLayout } from '@/stores/settings-store';
+import { SettingsSection, SettingItem, RadioGroup, ToggleSwitch } from './settings-section';
+import { LayoutPreview, useOptionPreview } from './layout-preview';
+import { cn } from '@/lib/utils';
+import { usePolicyStore } from '@/stores/policy-store';
+import { useAccountStore } from '@/stores/account-store';
+import { useEmailStore } from '@/stores/email-store';
+import { hiddenSharedMailIds, setSharedMailAccountHidden } from '@/lib/shared-mail-visibility';
+import { localizeMailboxName } from '@/lib/mailbox-label';
+
+const INTERFACE_LAYOUT_KEYS: Record<InterfaceLayout, string> = {
+  default: 'default',
+  'mountain-view': 'mountain_view',
+};
+
+/**
+ * The Appearance page's Layout section: where the interface, the reading
+ * pane and the toolbars sit.
+ */
+export function LayoutSection() {
+  const t = useTranslations('settings.appearance');
+  const tEmail = useTranslations('settings.email_behavior');
+  const tPreview = useTranslations('layout_preview');
+  const { toolbarPosition, showToolbarLabels, mailLayout, interfaceLayout, updateSetting } = useSettingsStore();
+  const { isSettingLocked, isSettingHidden } = usePolicyStore();
+  const mountainView = interfaceLayout === 'mountain-view';
+  // Each preview draws the option under the pointer or focus, so people can
+  // compare before they choose, and the selected one otherwise.
+  const interfacePreview = useOptionPreview(interfaceLayout);
+  const mailPreview = useOptionPreview(mailLayout);
+  const interfaceKey = INTERFACE_LAYOUT_KEYS[interfacePreview.shown];
+
+  return (
+    <SettingsSection id="layout" title={t('sections.layout')}>
+      {/* The interface layout decides where search, navigation and toolbars
+          go - a layout choice, so it leads the section. */}
+      {!isSettingHidden('interfaceLayout') && (
+      <SettingItem label={t('interface_layout.label')} description={t('interface_layout.description')} locked={isSettingLocked('interfaceLayout')}>
+        <div className="w-[22rem] max-w-full">
+          <div {...interfacePreview.handlers}>
+            <RadioGroup
+              value={interfaceLayout}
+              onChange={(value) => updateSetting('interfaceLayout', value as InterfaceLayout)}
+              options={[
+                { value: 'default', label: t('interface_layout.default') },
+                { value: 'mountain-view', label: t('interface_layout.mountain_view') },
+              ]}
+            />
+          </div>
+          {/* Drawn with the mail layout each option would use: the saved one
+              under the default layout, the full-width list under Mountain View. */}
+          <LayoutPreview
+            testId="interface-layout-preview"
+            option={interfacePreview.shown}
+            title={t(`interface_layout.${interfaceKey}`)}
+            description={tPreview(`${interfaceKey}_description`)}
+            selectedTitle={t(`interface_layout.${INTERFACE_LAYOUT_KEYS[interfaceLayout]}`)}
+            shell={interfacePreview.shown}
+            mail={effectiveMailLayout(mailLayout, interfacePreview.shown)}
+          />
+        </div>
+      </SettingItem>
+      )}
+      {/* Mountain View always shows the list and then the conversation, and
+          its toolbars are icon-only, so these two would change nothing there.
+          Their saved values stay and apply again under the default layout. */}
+      {!isSettingHidden('mailLayout') && !mountainView && (
+      <SettingItem label={tEmail('mail_layout.label')} description={tEmail('mail_layout.description')} locked={isSettingLocked('mailLayout')}>
+        <div className="w-[22rem] max-w-full">
+          <div {...mailPreview.handlers}>
+            <RadioGroup
+              value={mailLayout}
+              onChange={(value) => updateSetting('mailLayout', value as MailLayout)}
+              options={[
+                { value: 'split', label: tEmail('mail_layout.split') },
+                { value: 'focus', label: tEmail('mail_layout.focus') },
+                { value: 'horizontal', label: tEmail('mail_layout.horizontal') },
+              ]}
+            />
+          </div>
+          {/* In the shell of the chosen interface layout: the app rail and
+              folder sidebar of the default layout. */}
+          <LayoutPreview
+            testId="mail-layout-preview"
+            option={mailPreview.shown}
+            title={tEmail(`mail_layout.${mailPreview.shown}`)}
+            description={tEmail(`mail_layout.${mailPreview.shown}_description`)}
+            selectedTitle={tEmail(`mail_layout.${mailLayout}`)}
+            shell={interfaceLayout}
+            mail={mailPreview.shown}
+          />
+        </div>
+      </SettingItem>
+      )}
+      <SettingItem label={t('toolbar_position.label')} description={t('toolbar_position.description')}>
+        <RadioGroup
+          value={toolbarPosition}
+          onChange={(value) => updateSetting('toolbarPosition', value as ToolbarPosition)}
+          options={[
+            { value: 'top', label: t('toolbar_position.top') },
+            { value: 'below-subject', label: t('toolbar_position.below_subject') },
+          ]}
+        />
+      </SettingItem>
+
+      {!mountainView && (
+      <SettingItem label={t('toolbar_labels.label')} description={t('toolbar_labels.description')}>
+        <ToggleSwitch
+          checked={showToolbarLabels}
+          onChange={(checked) => updateSetting('showToolbarLabels', checked)}
+        />
+      </SettingItem>
+      )}
+    </SettingsSection>
+  );
+}
+
+/** The Appearance page's Sidebar section: what the folder sidebar and rail show. */
+export function SidebarSection() {
+  const t = useTranslations('settings.appearance');
+  const tP3 = useTranslations('mail_p3_conv');
+  const { sidebarAccountSwitcher, showRailAccountList, colorfulSidebarIcons, showFolderTotalCount, updateSetting } = useSettingsStore();
+  const accounts = useAccountStore(s => s.accounts);
+  const multiAccount = accounts.length > 1;
+
+  return (
+    <SettingsSection id="sidebar" title={t('sections.sidebar')}>
+      {/* Compose sits under the switcher now, not over the list (mail-p3-11). */}
+      <SettingItem label={t('sidebar_account_switcher.label')} description={tP3('sidebar_account_switcher_description')}>
+        <ToggleSwitch
+          checked={sidebarAccountSwitcher}
+          onChange={(checked) => updateSetting('sidebarAccountSwitcher', checked)}
+        />
+      </SettingItem>
+
+      <SettingItem label={t('colorful_sidebar_icons.label')} description={t('colorful_sidebar_icons.description')}>
+        <ToggleSwitch
+          checked={colorfulSidebarIcons}
+          onChange={(checked) => updateSetting('colorfulSidebarIcons', checked)}
+        />
+      </SettingItem>
+
+      <SettingItem label={t('show_folder_total_count.label')} description={t('show_folder_total_count.description')}>
+        <ToggleSwitch
+          checked={showFolderTotalCount}
+          onChange={(checked) => updateSetting('showFolderTotalCount', checked)}
+        />
+      </SettingItem>
+
+      {/* The rail avatars only mean something with a second account. */}
+      {multiAccount && (
+        <SettingItem label={t('show_rail_account_list.label')} description={t('show_rail_account_list.description')}>
+          <ToggleSwitch
+            checked={showRailAccountList}
+            onChange={(checked) => updateSetting('showRailAccountList', checked)}
+          />
+        </SettingItem>
+      )}
+    </SettingsSection>
+  );
+}
+
+/**
+ * How several accounts and shared mailboxes appear together: the unified
+ * mailbox and its entries, shared mailboxes, and how rows tell accounts
+ * apart. Only rendered once there is something to combine.
+ */
+export function MultipleAccountsSection() {
+  const t = useTranslations('settings.appearance');
+  const tSidebar = useTranslations('sidebar');
+  const { enableUnifiedMailbox, includeGroupInUnified, unifiedCrossAccount, allMailFolderIds, enableCrossUnreadView, enableCrossStarredView, enableCrossAllView, tintListRowsByAccount, showAccountDot, updateSetting } = useSettingsStore();
+  const { isSettingLocked, isSettingHidden, isFeatureEnabled } = usePolicyStore();
+  const accounts = useAccountStore(s => s.accounts);
+  const activeAccountId = useAccountStore(s => s.activeAccountId);
+  const mailboxes = useEmailStore(s => s.mailboxes);
+  const hasGroupInboxes = useMemo(() => mailboxes.some(m => m.isShared), [mailboxes]);
+  const showSharedMailAccounts = useSettingsStore(s => s.showSharedMailAccounts);
+  const compactSharedMailboxes = useSettingsStore(s => s.compactSharedMailboxes);
+  const hiddenSharedMailAccounts = useSettingsStore(s => s.hiddenSharedMailAccounts);
+  const hiddenSharedIds = hiddenSharedMailIds(hiddenSharedMailAccounts, activeAccountId);
+  const sharedMailAccounts = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const m of mailboxes) {
+      if (m.isShared && m.accountId && !byId.has(m.accountId)) byId.set(m.accountId, m.accountName || m.accountId);
+    }
+    return Array.from(byId, ([id, name]) => ({ id, name }));
+  }, [mailboxes]);
+  const connectedAccountCount = useMemo(() => accounts.filter(a => a.isConnected).length, [accounts]);
+  const unifiedCrossAccountAllowed = isFeatureEnabled('unifiedCrossAccountEnabled');
+  // Unified Mailbox entries (All mail / Unread / Starred), each gated independently
+  // by the admin. Scope (single account vs. cross-account) is governed by
+  // unifiedCrossAccount; the folder picker below narrows which own folders feed them.
+  const crossViews = [
+    { setting: 'enableCrossUnreadView', value: enableCrossUnreadView, allowed: isFeatureEnabled('crossUnreadViewEnabled'), labelKey: 'cross_unread.label', descKey: 'cross_unread.description' },
+    { setting: 'enableCrossStarredView', value: enableCrossStarredView, allowed: isFeatureEnabled('crossStarredViewEnabled'), labelKey: 'cross_starred.label', descKey: 'cross_starred.description' },
+    { setting: 'enableCrossAllView', value: enableCrossAllView, allowed: isFeatureEnabled('crossAllViewEnabled'), labelKey: 'cross_all.label', descKey: 'cross_all.description' },
+  ] as const;
+  // The folder picker narrows the own folders included in the entries above; show
+  // it once the user has enabled at least one of them.
+  const anyCrossEnabled = enableCrossUnreadView || enableCrossStarredView || enableCrossAllView;
+  const anyCrossAllowed = crossViews.some(c => c.allowed);
+
+  // Own (non-shared) folders and the active account's All Mail selection. The
+  // selection is per account: a missing entry = never configured, which
+  // defaults to all no-role folders; an explicit [] = no folders.
+  const ownMailboxes = useMemo(() => mailboxes.filter(m => !m.isShared), [mailboxes]);
+  const currentAllMailEntry = activeAccountId ? allMailFolderIds[activeAccountId] : undefined;
+  const allMailSelected = new Set(
+    currentAllMailEntry === undefined
+      ? ownMailboxes.filter(m => !m.role).map(m => m.id)
+      : currentAllMailEntry
+  );
+  const toggleAllMailFolder = (id: string) => {
+    if (!activeAccountId) return;
+    const next = new Set(allMailSelected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    updateSetting('allMailFolderIds', {
+      ...allMailFolderIds,
+      [activeAccountId]: ownMailboxes.filter(m => next.has(m.id)).map(m => m.id),
+    });
+  };
+  // Name the account the selection applies to, but only when more than one is
+  // logged in (otherwise it's unambiguous).
+  const activeAccount = accounts.find(a => a.id === activeAccountId);
+  const allMailAccountHint = accounts.length > 1 && activeAccount
+    ? t('all_mail.account_hint', { account: activeAccount.displayName || activeAccount.email })
+    : null;
+
+  // Nothing to combine: one account, no shared mailboxes, no group inboxes.
+  if (connectedAccountCount < 2 && sharedMailAccounts.length === 0 && !hasGroupInboxes) return null;
+
+  return (
+    <SettingsSection id="accounts" title={t('sections.accounts')} description={t('sections.accounts_description')}>
+      {!isSettingHidden('enableUnifiedMailbox') && (
+        <SettingItem
+          label={t('unified_mailbox.label')}
+          description={t('unified_mailbox.description')}
+          locked={isSettingLocked('enableUnifiedMailbox')}
+        >
+          <ToggleSwitch
+            checked={enableUnifiedMailbox}
+            onChange={(v) => updateSetting('enableUnifiedMailbox', v)}
+          />
+        </SettingItem>
+      )}
+
+      {enableUnifiedMailbox && connectedAccountCount > 1 && unifiedCrossAccountAllowed && !isSettingHidden('unifiedCrossAccount') && (
+        <SettingItem
+          nested
+          label={t('unified_mailbox.cross_account.label')}
+          description={t('unified_mailbox.cross_account.description')}
+          locked={isSettingLocked('unifiedCrossAccount')}
+        >
+          <ToggleSwitch
+            checked={unifiedCrossAccount}
+            onChange={(v) => updateSetting('unifiedCrossAccount', v)}
+          />
+        </SettingItem>
+      )}
+
+      {enableUnifiedMailbox && hasGroupInboxes && !isSettingHidden('includeGroupInUnified') && (
+        <SettingItem
+          nested
+          label={t('unified_mailbox.include_group.label')}
+          description={t('unified_mailbox.include_group.description')}
+          locked={isSettingLocked('includeGroupInUnified')}
+        >
+          <ToggleSwitch
+            checked={includeGroupInUnified}
+            onChange={(v) => updateSetting('includeGroupInUnified', v)}
+          />
+        </SettingItem>
+      )}
+
+      {enableUnifiedMailbox && anyCrossAllowed && crossViews.map(({ setting, value, allowed, labelKey, descKey }) => (
+        allowed && !isSettingHidden(setting) && (
+          <SettingItem
+            key={setting}
+            nested
+            label={t(labelKey)}
+            description={t(descKey)}
+            locked={isSettingLocked(setting)}
+          >
+            <ToggleSwitch
+              checked={value}
+              onChange={(v) => updateSetting(setting, v)}
+            />
+          </SettingItem>
+        )
+      ))}
+
+      {enableUnifiedMailbox && anyCrossAllowed && anyCrossEnabled && (
+        <div className="ms-4 border-s-2 border-border ps-3 space-y-2 py-2">
+          <div>
+            <div className="text-sm font-medium text-foreground">{t('all_mail.folders_label')}</div>
+            <div className="text-xs text-muted-foreground">{t('all_mail.folders_description')}</div>
+            {allMailAccountHint && (
+              <div className="text-xs italic text-muted-foreground mt-0.5">{allMailAccountHint}</div>
+            )}
+          </div>
+          {ownMailboxes.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t('all_mail.no_folders')}</p>
+          ) : (
+            <div className="space-y-0.5">
+              {ownMailboxes.map((mb) => {
+                const checked = allMailSelected.has(mb.id);
+                return (
+                  <button
+                    key={mb.id}
+                    type="button"
+                    onClick={() => toggleAllMailFolder(mb.id)}
+                    className="w-full flex items-center gap-2.5 py-1.5 px-2 rounded-md hover:bg-muted/50 text-start"
+                    role="checkbox"
+                    aria-checked={checked}
+                  >
+                    <span className={cn(
+                      "flex items-center justify-center w-4 h-4 rounded border flex-shrink-0 transition-colors",
+                      checked ? "bg-primary border-primary text-primary-foreground" : "border-border"
+                    )}>
+                      {checked && <Check className="w-3 h-3" />}
+                    </span>
+                    <Folder className={cn("w-4 h-4 flex-shrink-0", mb.role ? "text-primary" : "text-muted-foreground")} />
+                    <span className="text-sm text-foreground truncate">
+                      {localizeMailboxName(mb.role, mb.name, (k) => tSidebar(`mailboxes.${k}`))}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* In unified views a row needs to say which account it came from:
+          a coloured dot, or the whole row tinted. One choice, not two
+          toggles that override each other. */}
+      {connectedAccountCount > 1 && (
+        <SettingItem label={t('account_marker.label')} description={t('account_marker.description')}>
+          <RadioGroup
+            value={tintListRowsByAccount ? 'tint' : showAccountDot ? 'dot' : 'none'}
+            onChange={(value) => {
+              updateSetting('tintListRowsByAccount', value === 'tint');
+              updateSetting('showAccountDot', value === 'dot');
+            }}
+            options={[
+              { value: 'dot', label: t('account_marker.dot') },
+              { value: 'tint', label: t('account_marker.tint') },
+              { value: 'none', label: t('account_marker.none') },
+            ]}
+          />
+        </SettingItem>
+      )}
+
+      {sharedMailAccounts.length > 0 && !isSettingHidden('showSharedMailAccounts') && (
+        <SettingItem
+          label={t('show_shared_mail_accounts.label')}
+          description={t('show_shared_mail_accounts.description')}
+          locked={isSettingLocked('showSharedMailAccounts')}
+        >
+          <ToggleSwitch
+            checked={showSharedMailAccounts}
+            onChange={(v) => updateSetting('showSharedMailAccounts', v)}
+          />
+        </SettingItem>
+      )}
+
+      {sharedMailAccounts.length > 0 && showSharedMailAccounts && activeAccountId && !isSettingHidden('showSharedMailAccounts') && (
+        <div data-testid="shared-mail-account-list">
+          {sharedMailAccounts.map(({ id, name }) => (
+            <SettingItem key={id} nested label={name}>
+              <ToggleSwitch
+                checked={!hiddenSharedIds.includes(id)}
+                onChange={(v) => updateSetting(
+                  'hiddenSharedMailAccounts',
+                  setSharedMailAccountHidden(hiddenSharedMailAccounts, activeAccountId, id, !v),
+                )}
+              />
+            </SettingItem>
+          ))}
+        </div>
+      )}
+
+      {sharedMailAccounts.length > 0 && showSharedMailAccounts && !isSettingHidden('compactSharedMailboxes') && (
+        <SettingItem
+          label={t('compact_shared_mailboxes.label')}
+          description={t('compact_shared_mailboxes.description')}
+          locked={isSettingLocked('compactSharedMailboxes')}
+        >
+          <ToggleSwitch
+            checked={compactSharedMailboxes}
+            onChange={(v) => updateSetting('compactSharedMailboxes', v)}
+          />
+        </SettingItem>
+      )}
+    </SettingsSection>
+  );
+}
+
+/** Experimental: the Pro interface. Advanced, since it swaps the whole shell. */
+export function ExperimentalSection() {
+  const t = useTranslations('settings.appearance');
+  const { proInterface, updateSetting } = useSettingsStore();
+  return (
+    <SettingsSection id="experimental" title={t('sections.experimental')} advanced>
+      <SettingItem label={t('pro_interface.label')} description={t('pro_interface.description')} advanced>
+        <ToggleSwitch
+          checked={proInterface}
+          onChange={(v) => updateSetting('proInterface', v)}
+          testId="setting-pro-interface"
+        />
+      </SettingItem>
+    </SettingsSection>
+  );
+}

@@ -1,0 +1,277 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
+import { EmailComposer, type ComposerDraftData } from "@/components/email/email-composer";
+import { ErrorBoundary, ComposerErrorFallback } from "@/components/error";
+import { useAuthStore } from "@/stores/auth-store";
+import { useEmailStore } from "@/stores/email-store";
+import { useAccountStore } from "@/stores/account-store";
+import { resolveComposeAccountEmail } from "@/lib/reply-identity";
+import { toast } from "@/stores/toast-store";
+import { useProTabStore, registerProTabCloseInterceptor, type ProComposeTabData } from "@/stores/pro-tab-store";
+import { debug } from "@/lib/debug";
+import { threadKeyFor } from "@/lib/thread-utils";
+import { formatRejectedRecipients } from "@/lib/jmap/client";
+import { announceSent } from "@/lib/plugin-after-send";
+import { composerSendOptions } from "@/lib/outgoing/composer-send-options";
+import { usePopoutsAvailable } from "@/hooks/use-popouts-available";
+import { openComposerWindow } from "@/lib/popout/open";
+
+interface ProComposeTabBodyProps {
+  tabId: string;
+  data: ProComposeTabData;
+}
+
+/**
+ * Renders a standalone `<EmailComposer />` inside its own Pro tab. Sending,
+ * draft autosave, and discard all flow through the shared `email-store`, so
+ * the result is identical to composing inline in the mail page - the
+ * composer is just hosted in its own tab instead of in the right pane.
+ */
+export function ProComposeTabBody({ tabId, data }: ProComposeTabBodyProps) {
+  const t = useTranslations();
+  const client = useAuthStore((s) => s.client);
+  const sendEmail = useEmailStore((s) => s.sendEmail);
+  const refreshCurrentMailbox = useEmailStore((s) => s.refreshCurrentMailbox);
+  const fetchScheduledEmails = useEmailStore((s) => s.fetchScheduledEmails);
+  const refreshScheduledMetadata = useEmailStore((s) => s.refreshScheduledMetadata);
+  const isScheduledView = useEmailStore((s) => s.isScheduledView);
+  const closeTab = useProTabStore((s) => s.closeTab);
+  const updateTabTitle = useProTabStore((s) => s.updateTabTitle);
+  const updateComposeDraft = useProTabStore((s) => s.updateComposeDraft);
+
+  // Keep stable references for the callbacks below so the composer's
+  // `key={sessionId}` doesn't churn.
+  const tabIdRef = useRef(tabId);
+  tabIdRef.current = tabId;
+
+  // Set by the composer to its dirty-aware close handler. Lets the Pro tab
+  // bar's "X" route through the same "Save or discard draft?" guard.
+  const requestCloseRef = useRef<((afterClose?: () => void) => void) | null>(null);
+
+  const handleScheduledSendCreated = useCallback(async () => {
+    if (client) {
+      await refreshScheduledMetadata(client);
+      if (isScheduledView) await fetchScheduledEmails(client);
+    }
+    closeTab(tabIdRef.current);
+  }, [client, refreshScheduledMetadata, isScheduledView, fetchScheduledEmails, closeTab]);
+
+  const handleSend = useCallback(async (sendData: Parameters<NonNullable<React.ComponentProps<typeof EmailComposer>['onSend']>>[0]) => {
+    // Nothing is sent: the composer keeps what only goes once the mail is out.
+    if (!client) return false;
+    // The Pro From dropdown lists identities from every connected account, so
+    // the chosen identity may belong to a different account than the active
+    // one. Submit through that account's own client - the identity id is only
+    // valid on its own server, and submitting on the active account's session
+    // makes the server sign with the wrong DKIM key (#461). The draft was
+    // already saved against the same account by the composer.
+    const sendClient = sendData.localAccountId
+      ? (useAuthStore.getState().getClientForAccount(sendData.localAccountId) ?? client)
+      : client;
+    // See the inline composer's handleEmailSend: a resolved onSend tells the
+    // composer the message is gone and it clears itself, so a genuine send
+    // failure has to propagate rather than be logged away (#702).
+    let submitted = false;
+    try {
+      const result = await sendEmail(
+        sendClient,
+        sendData.to,
+        sendData.subject,
+        sendData.body,
+        sendData.cc,
+        sendData.bcc,
+        sendData.identityId,
+        sendData.fromEmail,
+        sendData.draftId,
+        sendData.fromName,
+        sendData.htmlBody,
+        sendData.attachments,
+        sendData.inReplyTo,
+        sendData.references,
+        sendData.delayedUntil,
+        sendData.envelopeMailFrom,
+        // The composer's whole options, as the mail page passes them: the
+        // tab used to send without priority, read receipt, DSN, REQUIRETLS,
+        // plugin headers and the classification label.
+        composerSendOptions(sendData),
+      );
+      submitted = true;
+      if (result.rejectedRecipients?.length) {
+        // As in the inline composer: nothing else would say who never gets it.
+        toast.warning(t('email_composer.recipients_partly_refused', {
+          recipients: formatRejectedRecipients(result.rejectedRecipients),
+        }));
+      }
+      announceSent(result, sendData);
+
+      // Mark the original message as $answered / $forwarded so the standard
+      // viewer and list reflect the action (same behaviour as inline compose).
+      // Before the scheduled return: with a send delay every send is a held
+      // submission, and the flag was never set. (#985)
+      if (data.sourceEmailId && (data.mode === 'reply' || data.mode === 'replyAll')) {
+        try {
+          await useEmailStore.getState().markEmailKeyword(client, data.sourceEmailId, '$answered', data.sourceEmailSource ?? undefined);
+        } catch (e) {
+          debug.error('Failed to set $answered keyword:', e);
+        }
+      } else if (data.sourceEmailId && data.mode === 'forward') {
+        try {
+          await useEmailStore.getState().markEmailKeyword(client, data.sourceEmailId, '$forwarded', data.sourceEmailSource ?? undefined);
+        } catch (e) {
+          debug.error('Failed to set $forwarded keyword:', e);
+        }
+      }
+
+      if (result.scheduled) {
+        await handleScheduledSendCreated();
+        return;
+      }
+
+      // Refresh the currently-active mail list so the new sent message /
+      // updated keyword status shows up.
+      await refreshCurrentMailbox(client);
+      // Re-fetch the replied thread's cross-folder data so the expanded
+      // view shows the newly sent reply without collapsing.
+      if (data.sourceEmailId) {
+        const emailState = useEmailStore.getState();
+        const repliedEmail = emailState.emails.find(e => e.id === data.sourceEmailId);
+        if (repliedEmail?.threadId && emailState.expandedThreadIds.has(threadKeyFor(repliedEmail))) {
+          const accountId = client.getAccountId();
+          const fullEmails = await client.getThreadEmails(repliedEmail.threadId, accountId);
+          if (fullEmails.length > 0) {
+            useEmailStore.setState((state) => {
+              const c = new Map(state.threadEmailsCache);
+              c.set(threadKeyFor(repliedEmail), fullEmails);
+              return { threadEmailsCache: c };
+            });
+          }
+        }
+      }
+      closeTab(tabIdRef.current);
+    } catch (error) {
+      console.error('Failed to send email:', error);
+      // Post-send bookkeeping failing is cosmetic; the mail is already out.
+      if (!submitted) throw error;
+      toast.error(t('notifications.error_sending'));
+    }
+  }, [client, sendEmail, closeTab, data.sourceEmailId, data.sourceEmailSource, data.mode, t, handleScheduledSendCreated, refreshCurrentMailbox]);
+
+  const handleClose = useCallback(() => {
+    closeTab(tabIdRef.current);
+  }, [closeTab]);
+
+  // Register a close interceptor so closing the tab from the tab bar (the
+  // "X" button or middle-click) goes through the composer's unsaved-changes
+  // guard, mirroring the non-Pro inline composer.
+  useEffect(() => {
+    const id = tabIdRef.current;
+    return registerProTabCloseInterceptor(id, () => {
+      if (requestCloseRef.current) {
+        requestCloseRef.current();
+      } else {
+        closeTab(id);
+      }
+    });
+  }, [closeTab]);
+
+  const handleDiscardDraft = useCallback(async (draftId: string, draft?: { accountId?: string; localAccountId?: string }) => {
+    if (!client) return;
+    // Same routing as the inline composer's discard: the login the draft was
+    // saved with, and the account it lives in (see ComposerDraftData), never
+    // another login once that one is gone.
+    const draftClient = draft?.localAccountId
+      ? useAuthStore.getState().getClientForAccount(draft.localAccountId)
+      : client;
+    if (!draftClient) {
+      toast.error(t('email_composer.discard_signed_out'));
+      return;
+    }
+    try {
+      await draftClient.deleteEmail(draftId, draft?.accountId);
+    } catch (error) {
+      console.error('Failed to discard draft:', error);
+    }
+  }, [client, t]);
+
+  const handleSaveState = useCallback((state: ComposerDraftData) => {
+    updateComposeDraft(tabIdRef.current, state);
+  }, [updateComposeDraft]);
+
+  // The tab's title is the subject as it is typed, so several open compose
+  // tabs can be told apart. replyTo is no source for it: the mail tab fills
+  // that in from the selected message for a new message too.
+  const newMessageTitle = t('email_composer.new_message');
+  const handleSubjectChange = useCallback((subject: string) => {
+    updateTabTitle(tabIdRef.current, subject.trim() || newMessageTitle);
+  }, [updateTabTitle, newMessageTitle]);
+
+  const popoutsOn = usePopoutsAvailable();
+
+  // Mirrors the standard shell (see the same prop in `components/mail/mail-app.tsx`).
+  // Without it `mode === 'compose'` resolves `findComposeIdentityId(identities,
+  // undefined)` -> null and every new message in the Pro shell defaults to the
+  // account owner, even with a shared folder open. The Pro shell hoists every
+  // "show composer" intent - including `mailto:` links - into a tab, so this
+  // omission covered the whole compose surface there.
+  //
+  // Read once, at mount: this is "the mailbox the message was started from",
+  // and the composer consumes it only while no identity has been picked yet.
+  // A tab body stays mounted (hidden) for as long as the tab is open, so
+  // subscribing to the mailbox list instead would re-render the composer - and
+  // its editor - on every counter refresh for the rest of the tab's life.
+  const [composeFromAccountEmail] = useState(() => {
+    const { mailboxes, selectedMailbox, viewingAccountId } = useEmailStore.getState();
+    const accountId = viewingAccountId ?? useAuthStore.getState().activeAccountId ?? '';
+    return resolveComposeAccountEmail(
+      mailboxes,
+      selectedMailbox,
+      useAccountStore.getState().getAccountById(accountId)?.email,
+    );
+  });
+
+  const popOut = useCallback(() => {
+    const target = openComposerWindow(useAuthStore.getState().activeAccountId);
+    if (!target) return null;
+    return {
+      cancel: target.cancel,
+      handOver: (state: ComposerDraftData) => target.handOver({
+        mode: state.mode,
+        replyTo: state.replyTo,
+        initialData: state,
+        sourceEmailId: data.sourceEmailId,
+        sourceEmailSource: data.sourceEmailSource,
+        composeFromAccountEmail,
+      }),
+    };
+  }, [composeFromAccountEmail, data.sourceEmailId, data.sourceEmailSource]);
+
+  return (
+    <div className="flex h-full w-full flex-col bg-background">
+      <ErrorBoundary fallback={ComposerErrorFallback}>
+        <EmailComposer
+          key={data.sessionId}
+          mode={data.initialData?.mode ?? data.mode}
+          replyTo={data.replyTo}
+          initialDraftText={data.initialDraftText}
+          initialData={data.initialData}
+          prefill={data.prefill}
+          initialFiles={data.initialFiles}
+          sessionKey={`pro-${tabId}-${data.sessionId}`}
+          sourceEmailId={data.sourceEmailId ?? undefined}
+          composeFromAccountEmail={composeFromAccountEmail}
+          onSend={handleSend}
+          onScheduledSendCreated={handleScheduledSendCreated}
+          onClose={handleClose}
+          requestCloseRef={requestCloseRef}
+          onDiscardDraft={handleDiscardDraft}
+          onSaveState={handleSaveState}
+          popOut={popoutsOn ? popOut : undefined}
+          onSubjectChange={handleSubjectChange}
+          className="flex-1"
+        />
+      </ErrorBoundary>
+    </div>
+  );
+}

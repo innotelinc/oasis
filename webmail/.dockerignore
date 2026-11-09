@@ -1,0 +1,45 @@
+node_modules
+.next
+out
+sourcemaps
+lite-image
+.git
+.gitignore
+.env*
+!.env.example
+!.env.dev.example
+scripts/
+!scripts/lite/
+!scripts/desktop-build-flag.mjs
+!scripts/lite-intl-assets.mjs
+!scripts/compile-hints.mjs
+!scripts/build-plugin-sandbox.mjs
+!scripts/build-pst-worker.mjs
+!scripts/build-store-worker.mjs
+!scripts/fetch-sqlite3mc.mjs
+!scripts/healthcheck.mjs
+!scripts/sourcemaps.mjs
+!scripts/standalone-guard.mjs
+# Built in the image by scripts/build-plugin-sandbox.mjs
+public/plugin-sandbox-assets/
+# Built in the image by scripts/build-store-worker.mjs
+public/store-worker.js
+public/sqlite3mc/
+TODO.md
+*.md
+!README.md
+# Sibling projects / test harness - not part of the webmail image
+examples/
+# Unit tests: `next build` type-checks every .ts file, and some tests import
+# routes the Dockerfile deletes (app/api/dev-jmap). The Dockerfile deletes the
+# tests as well, since a remote Git context skips this file.
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+integration/
+repos/
+# Runtime state of a checkout that has been run (admin password hash,
+# plugin signing key, audit log, synced settings) - never part of an image
+data/
+local-data/
+**/node_modules

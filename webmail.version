@@ -7,4 +7,5 @@ version = 1.21.0
 revision = 2f1fd5f3dd6202cf25eead071f182899b5893fd7
 image = ghcr.io/innotelinc/webmail-release:sha-2f1fd5f
 upstream = 1.21.0
+source_revision = 6344b6721
 source = https://github.com/innotelinc/webmail (tag 1.21.0, Loomix rebrand on main)

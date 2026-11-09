@@ -1,0 +1,285 @@
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NextRequest } from 'next/server';
+
+// POST /api/auth/sso/complete. A pairing step-up (purpose `reauth`)
+// completes at /api/auth/reauth/sso/complete only: handed to this route, its
+// code would sign the browser in as whoever answered the provider's prompt.
+// For the mobile app handoff, the phone gets a bundle it can renew.
+
+vi.mock('@/lib/auth/session-secret', () => ({
+  getSessionSecret: () => 's'.repeat(64),
+  hasSessionSecret: () => true,
+}));
+vi.mock('@/lib/logger', () => ({
+  logger: { warn: () => {}, error: () => {}, info: () => {}, debug: () => {} },
+}));
+
+const jar = new Map<string, string>();
+const cookieStore = {
+  get: (name: string) => (jar.has(name) ? { name, value: jar.get(name)! } : undefined),
+  set: (name: string, value: string) => { jar.set(name, value); },
+  delete: (arg: string | { name: string }) => { jar.delete(typeof arg === 'string' ? arg : arg.name); },
+  getAll: () => [...jar].map(([name, value]) => ({ name, value })),
+};
+vi.mock('next/headers', () => ({ cookies: async () => cookieStore }));
+
+const exchangeCodeForTokens = vi.fn();
+let tokenEndpoint = 'https://idp.example.net/token';
+let confidential = false;
+vi.mock('@/lib/oauth/token-exchange', () => ({
+  exchangeCodeForTokens: (...args: unknown[]) => exchangeCodeForTokens(...args),
+  getTokenEndpoint: async () => tokenEndpoint,
+  getRequiredConfig: () => ({ clientId: 'webmail', serverUrl: 'https://mail.example.org', discoveryUrl: 'https://idp.example.net' }),
+  hasClientSecret: () => confidential,
+}));
+
+import { encryptPayload } from '@/lib/auth/crypto';
+import { openPhoneRefreshToken } from '@/lib/auth/pair-bundle';
+import { POST } from '@/app/api/auth/sso/complete/route';
+import { createHash } from 'crypto';
+import { confirmHandoff, redeemHandoff, resetHandoffStoreForTests } from '@/lib/auth/handoff-store';
+import { setStoreForTests } from '@/lib/shared-store';
+import { resetLocalStoreForTests } from '@/lib/shared-store/local';
+import { switchableSharedStore } from './helpers/shared-store-down';
+
+function pending(extra: Record<string, unknown> = {}) {
+  jar.set('sso_pending', encryptPayload({
+    state: 'state-1',
+    code_verifier: 'verifier-1',
+    redirect_uri: 'https://webmail.example/en/auth/callback',
+    created_at: Date.now(),
+    ...extra,
+  }, 'sso-pending'));
+}
+
+async function complete(extra: Record<string, unknown> = {}) {
+  const res = await POST(new NextRequest('https://webmail.example/api/auth/sso/complete', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+    body: JSON.stringify({ code: 'code-1', state: 'state-1', ...extra }),
+  }));
+  return { status: res.status, body: await res.json() };
+}
+
+beforeEach(() => {
+  jar.clear();
+  resetHandoffStoreForTests();
+  tokenEndpoint = 'https://idp.example.net/token';
+  confidential = false;
+  exchangeCodeForTokens.mockReset().mockResolvedValue({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 });
+});
+
+describe('/api/auth/sso/complete', () => {
+  it('refuses a pairing re-auth and spends nothing', async () => {
+    pending({ purpose: 'reauth', slot: 0 });
+    const res = await complete();
+    expect(res.status).toBe(400);
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled();
+    expect(jar.has('jmap_rt')).toBe(false);
+    expect(jar.has('sso_pending')).toBe(false);
+  });
+
+  it('still completes an ordinary login', async () => {
+    pending();
+    const res = await complete();
+    expect(res.status).toBe(200);
+    expect(exchangeCodeForTokens).toHaveBeenCalledOnce();
+    expect(jar.get('jmap_rt')).toBe('rt');
+  });
+
+  it('writes a sixth account to its own slot, not over the first account', async () => {
+    jar.set('jmap_rt', 'first-account-rt');
+    pending();
+    const res = await complete({ slot: 5 });
+    expect(res.status).toBe(200);
+    expect(jar.get('jmap_rt_5')).toBe('rt');
+    expect(jar.get('jmap_rt')).toBe('first-account-rt');
+  });
+
+  it('falls back to slot 0 for a slot outside the account range', async () => {
+    pending();
+    await complete({ slot: 50 });
+    expect(jar.get('jmap_rt')).toBe('rt');
+    expect(jar.has('jmap_rt_50')).toBe(false);
+  });
+});
+
+describe('/api/auth/sso/complete for the mobile app handoff', () => {
+  // The app renews with client_id only, at a token endpoint on the mail
+  // server's or the webmail's host. Anything else goes through the webmail.
+  const mobile = () => pending({
+    redirect_uri: 'https://webmail.example/mail/en/auth/callback',
+    mobile_redirect_uri: 'bulwarkmobile://auth/callback',
+    mobile_state: 'm-1',
+  });
+
+  it('hands a public client on the mail server straight to the app', async () => {
+    tokenEndpoint = 'https://mail.example.org/auth/token';
+    mobile();
+    const res = await complete();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      refresh_token: 'rt',
+      token_endpoint: 'https://mail.example.org/auth/token',
+      client_id: 'webmail',
+      server_url: 'https://mail.example.org',
+      mobile_state: 'm-1',
+    });
+    expect(jar.has('jmap_rt')).toBe(false);
+  });
+
+  it('renews a confidential client through the webmail, with a sealed token', async () => {
+    tokenEndpoint = 'https://mail.example.org/auth/token';
+    confidential = true;
+    mobile();
+    const res = await complete();
+    expect(res.body.token_endpoint).toBe('https://webmail.example/mail/api/auth/pair/token');
+    expect(res.body.refresh_token).not.toBe('rt');
+    expect(openPhoneRefreshToken(res.body.refresh_token)).toMatchObject({
+      refreshToken: 'rt',
+      clientId: 'webmail',
+      tokenEndpoint: 'https://mail.example.org/auth/token',
+      trusted: true,
+    });
+  });
+
+  it('renews through the webmail when the provider is on a host the app refuses', async () => {
+    mobile();
+    const res = await complete();
+    expect(res.body.token_endpoint).toBe('https://webmail.example/mail/api/auth/pair/token');
+    expect(openPhoneRefreshToken(res.body.refresh_token)?.tokenEndpoint).toBe('https://idp.example.net/token');
+  });
+});
+
+describe('/api/auth/sso/complete for an app that sent a PKCE challenge', () => {
+  // bulwarkmail.org/docs/development/mobile-handoff: the tokens stay on the server and the page gets
+  // only a one-time code for the app link.
+  const VERIFIER = 'x'.repeat(50);
+  const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
+
+  it('returns a code instead of the tokens, and the app redeems the tokens with it', async () => {
+    tokenEndpoint = 'https://mail.example.org/auth/token';
+    pending({
+      redirect_uri: 'https://webmail.example/mail/en/auth/callback',
+      mobile_redirect_uri: 'bulwarkmobile://auth/callback',
+      mobile_state: 'm-1',
+      mobile_code_challenge: CHALLENGE,
+    });
+    const res = await complete();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      mobile_handoff_code: expect.stringMatching(/^[0-9a-f]{64}$/),
+      server_url: 'https://mail.example.org',
+      mobile_redirect_uri: 'bulwarkmobile://auth/callback',
+      mobile_state: 'm-1',
+    });
+    expect(JSON.stringify(res.body)).not.toMatch(/"at"|"rt"/);
+    expect(jar.has('jmap_rt')).toBe(false);
+
+    expect(await confirmHandoff(res.body.mobile_handoff_code)).toBe(true);
+    const redeemed = await redeemHandoff(res.body.mobile_handoff_code, VERIFIER);
+    expect(redeemed).toMatchObject({
+      ok: true,
+      state: 'm-1',
+      bundle: {
+        flow: 'oauth',
+        access_token: 'at',
+        refresh_token: 'rt',
+        token_endpoint: 'https://mail.example.org/auth/token',
+        client_id: 'webmail',
+        server_url: 'https://mail.example.org',
+      },
+    });
+  });
+
+  it('keeps answering with the tokens for an app that sent no challenge', async () => {
+    tokenEndpoint = 'https://mail.example.org/auth/token';
+    pending({ mobile_redirect_uri: 'bulwarkmobile://auth/callback', mobile_state: 'm-1' });
+    const res = await complete();
+    expect(res.body.access_token).toBe('at');
+    expect(res.body.mobile_handoff_code).toBeUndefined();
+  });
+});
+
+describe('sso/complete mobile hand-off while the shared store is down (#1066)', () => {
+  afterEach(() => {
+    setStoreForTests(null);
+    resetLocalStoreForTests();
+  });
+
+  it('answers 503 instead of a hand-off code that could never be redeemed', async () => {
+    const store = switchableSharedStore();
+    store.down = true;
+    setStoreForTests(store);
+    tokenEndpoint = 'https://mail.example.org/auth/token';
+    pending({
+      redirect_uri: 'https://webmail.example/mail/en/auth/callback',
+      mobile_redirect_uri: 'bulwarkmobile://auth/callback',
+      mobile_state: 'm-1',
+      mobile_code_challenge: createHash('sha256').update('x'.repeat(50)).digest('base64url'),
+    });
+    const res = await complete();
+    expect(res.status).toBe(503);
+    expect(JSON.stringify(res.body)).not.toMatch(/"at"|"rt"|mobile_handoff_code/);
+  });
+});
+
+describe('/api/auth/sso/complete for the desktop app', () => {
+  const VERIFIER = 'x'.repeat(50);
+  const CHALLENGE = createHash('sha256').update(VERIFIER).digest('base64url');
+  const LISTENER = 'http://127.0.0.1:51234/bulwark-desktop/callback';
+
+  it('parks the tokens under a code, writes nothing in this browser, and only a confirmed code redeems', async () => {
+    exchangeCodeForTokens.mockResolvedValue({ access_token: 'at', refresh_token: 'rt', id_token: 'idt', expires_in: 3600 });
+    pending({ mobile_redirect_uri: LISTENER, mobile_state: 'd-1', mobile_code_challenge: CHALLENGE });
+    const res = await complete();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      mobile_handoff_code: expect.stringMatching(/^[0-9a-f]{64}$/),
+      server_url: 'https://mail.example.org',
+      account: '',
+      mobile_redirect_uri: LISTENER,
+      mobile_state: 'd-1',
+    });
+    expect(JSON.stringify(res.body)).not.toMatch(/"at"|"rt"|idt/);
+    expect(jar.has('jmap_rt')).toBe(false);
+    expect(jar.has('sso_pending')).toBe(false);
+
+    expect((await redeemHandoff(res.body.mobile_handoff_code, VERIFIER)).ok).toBe(false);
+  });
+
+  it('names the account for the question: from the id token, or the server\'s session', async () => {
+    const jwt = (claims: object) => `x.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.y`;
+    exchangeCodeForTokens.mockResolvedValue({ access_token: 'at', refresh_token: 'rt', id_token: jwt({ email: 'alice@example.org' }), expires_in: 3600 });
+    pending({ mobile_redirect_uri: LISTENER, mobile_state: 'd-1', mobile_code_challenge: CHALLENGE });
+    expect((await complete()).body.account).toBe('alice@example.org');
+
+    const fetched = vi.fn(async () => new Response(JSON.stringify({ username: 'bob@example.org' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetched);
+    exchangeCodeForTokens.mockResolvedValue({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 });
+    pending({ mobile_redirect_uri: LISTENER, mobile_state: 'd-1', mobile_code_challenge: CHALLENGE });
+    expect((await complete()).body.account).toBe('bob@example.org');
+    expect(fetched).toHaveBeenCalledWith('https://mail.example.org/.well-known/jmap', expect.objectContaining({ headers: { Authorization: 'Bearer at' } }));
+    vi.unstubAllGlobals();
+  });
+
+  it('hands the refresh token itself to the app, which writes its own cookie', async () => {
+    exchangeCodeForTokens.mockResolvedValue({ access_token: 'at', refresh_token: 'rt', id_token: 'idt', expires_in: 3600 });
+    pending({ mobile_redirect_uri: LISTENER, mobile_state: 'd-1', mobile_code_challenge: CHALLENGE, server_id: 'second' });
+    const res = await complete();
+    expect(await confirmHandoff(res.body.mobile_handoff_code)).toBe(true);
+    expect(await redeemHandoff(res.body.mobile_handoff_code, VERIFIER)).toMatchObject({
+      ok: true,
+      state: 'd-1',
+      bundle: { flow: 'desktop-tokens', server_id: 'second', access_token: 'at', refresh_token: 'rt', id_token: 'idt' },
+    });
+  });
+
+  it('fails rather than hands over tokens if a pending cookie has no challenge', async () => {
+    pending({ mobile_redirect_uri: LISTENER, mobile_state: 'd-1' });
+    const res = await complete();
+    expect(res.status).toBe(401);
+    expect(JSON.stringify(res.body)).not.toMatch(/"at"|"rt"/);
+  });
+});

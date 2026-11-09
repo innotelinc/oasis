@@ -1,0 +1,947 @@
+"use client";
+
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
+import { Mail, CalendarEvent, Users, Folder, Settings, Keyboard, Plus, Shield, LogOut, Check, Search, Puzzle, Accessibility } from "@/components/icons";
+import { openAccessibilityPanel } from "@/components/accessibility/accessibility-quick-panel";
+import { AccountSwitcher } from "./account-switcher";
+import { iconForName } from "@/components/icons";
+import { SidebarAppIcon } from "@/components/layout/sidebar-app-icon";
+import { useConfig } from "@/hooks/use-config";
+import { useThemeStore } from "@/stores/theme-store";
+import { useShallow } from "zustand/react/shallow";
+import { usePathname, Link, useRouter } from "@/i18n/navigation";
+import { useTranslations } from "next-intl";
+import { useCalendarStore } from "@/stores/calendar-store";
+import { useSettingsStore } from "@/stores/settings-store";
+import { usePolicyStore } from "@/stores/policy-store";
+import { useResolvedSidebarApps } from "@/hooks/use-resolved-sidebar-apps";
+import { useAuthStore } from "@/stores/auth-store";
+import { useAccountStore } from "@/stores/account-store";
+import { useUpdateStore, selectHasUpdate } from "@/stores/update-store";
+import { accountAvatarName, getMaxAccounts } from "@/lib/account-utils";
+import { isDocumentRTL } from "@/i18n/direction";
+import { cn, formatFileSize } from "@/lib/utils";
+import { quotaLevel, type StorageQuota } from "@/lib/quota";
+import { useContextMenu } from "@/hooks/use-context-menu";
+import { ContextMenu, ContextMenuItem } from "@/components/ui/context-menu";
+import { PluginSlot } from "@/components/plugins/plugin-slot";
+import { useStalwartAdmin } from "@/hooks/use-stalwart-admin";
+import { LazyKeyboardShortcutsModal } from "@/components/lazy-keyboard-shortcuts-modal";
+import { getPathPrefix, withBasePath } from "@/lib/browser-navigation";
+import { interceptLeave } from "@/lib/leave-guard";
+import { Avatar } from "@/components/ui/avatar";
+import { toUnicodeEmail } from "@/lib/idn";
+import { usePluginPages, pluginPageHref, isPluginPageActive } from "@/hooks/use-plugin-pages";
+import { NotificationBell } from "@/components/notifications/notification-center";
+import { useBottomControls } from "@/hooks/use-bottom-controls";
+import { useAllInboxesUnread } from "@/hooks/use-all-inboxes-unread";
+import { writeRailHints, type RailHint } from "@/lib/boot-skeleton/hints";
+import { usePrefetchAfterStart } from "@/hooks/use-prefetch-after-start";
+
+interface NavItem {
+  id: string;
+  icon: typeof Mail;
+  labelKey: string;
+  href: string;
+  hidden?: boolean;
+  badge?: number;
+}
+
+/**
+ * How wide a phone tab bar entry should be, or null when all of them fit at
+ * the normal width. A bar that doesn't fit shows whole entries and half of
+ * the next: half an entry says there is more to scroll to, a few cut-off
+ * pixels only look broken.
+ */
+export function tabBarItemWidth(barWidth: number, count: number, minWidth = 52): number | null {
+  if (!barWidth || count * minWidth <= barWidth) return null;
+  const whole = Math.max(1, Math.floor(barWidth / minWidth - 0.5));
+  return barWidth / (whole + 0.5);
+}
+
+interface NavigationRailProps {
+  orientation?: "vertical" | "horizontal";
+  collapsed?: boolean;
+  className?: string;
+  quota?: StorageQuota | null;
+  isPushConnected?: boolean;
+  onLogout?: () => void;
+  onShowShortcuts?: () => void;
+  onManageApps?: () => void;
+  onInlineApp?: (appId: string, url: string, name: string) => void;
+  onCloseInlineApp?: () => void;
+  activeAppId?: string | null;
+  /**
+   * If provided, intercepts the rail's built-in route navigation. Return
+   * `true` to prevent the underlying `<Link>` from navigating - used by the
+   * Pro interface to open the route as a tab instead. The visual rail is
+   * unchanged.
+   */
+  onNavigate?: (itemId: 'mail' | 'calendar' | 'contacts' | 'files' | 'settings') => boolean | void;
+  /**
+   * When `onNavigate` is in use, this controls which nav item the rail
+   * highlights as active (since the URL alone no longer reflects the
+   * active app).
+   */
+  activeItemId?: 'mail' | 'calendar' | 'contacts' | 'files' | 'settings' | null;
+  /**
+   * The admin panel's own rail: shows the Admin entry as the current one,
+   * for password admins too, who are not Stalwart admins.
+   */
+  adminActive?: boolean;
+  /**
+   * Pro shell only: renders a Search entry that opens the global search
+   * palette (#641) instead of navigating anywhere.
+   */
+  onOpenSearch?: () => void;
+}
+
+function StorageQuotaCircle({ quota, usagePercent }: { quota: StorageQuota; usagePercent: number }) {
+  const t = useTranslations("sidebar");
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
+
+  const updatePosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    setPopoverStyle(
+      isDocumentRTL()
+        ? {
+            position: "fixed",
+            right: window.innerWidth - rect.left + 8,
+            bottom: window.innerHeight - rect.bottom,
+          }
+        : {
+            position: "fixed",
+            left: rect.right + 8,
+            bottom: window.innerHeight - rect.bottom,
+          }
+    );
+  }, []);
+
+  // Position before the first paint - the portalled popover would otherwise
+  // render one frame as an unpositioned block at the end of <body>, shifting
+  // the page layout for a split second.
+  useLayoutEffect(() => {
+    if (open) updatePosition();
+  }, [open, updatePosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (
+        buttonRef.current?.contains(e.target as Node) ||
+        popoverRef.current?.contains(e.target as Node)
+      ) return;
+      setOpen(false);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  // Usage can legitimately exceed the quota (e.g. limit lowered after the fact)
+  const free = Math.max(0, quota.total - quota.used);
+  const level = quotaLevel(quota);
+  const strokeColor = level === "full"
+    ? "stroke-destructive"
+    : level === "warn"
+      ? "stroke-warning"
+      : "stroke-success";
+
+  return (
+    <div className="relative">
+      <button
+        ref={buttonRef}
+        onClick={() => setOpen(!open)}
+        className="relative w-8 h-8 flex items-center justify-center rounded-full hover:bg-muted transition-colors cursor-pointer"
+        aria-label={t("storage")}
+        aria-expanded={open}
+      >
+        <svg className="w-8 h-8 -rotate-90" viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="12" fill="none" className="stroke-muted" strokeWidth="3" />
+          <circle
+            cx="16" cy="16" r="12" fill="none"
+            className={cn(strokeColor)}
+            strokeWidth="3" strokeLinecap="round"
+            strokeDasharray={`${(usagePercent / 100) * 75.4} 75.4`}
+            style={{ transition: "stroke-dasharray 0.3s" }}
+          />
+        </svg>
+        <span className="absolute text-[0.4375rem] font-bold text-muted-foreground tabular-nums">
+          {Math.round(usagePercent)}%
+        </span>
+      </button>
+
+      {open && createPortal(
+        <div ref={popoverRef} style={popoverStyle} className="w-52 rounded-lg border border-border bg-background text-foreground shadow-lg p-3 z-50">
+          <p className="text-xs font-semibold mb-2">{t("storage")}</p>
+          <div className="space-y-1.5 text-xs">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t("storage_used")}</span>
+              <span className="font-medium tabular-nums">{formatFileSize(quota.used)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t("storage_free")}</span>
+              <span className="font-medium tabular-nums">{formatFileSize(free)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t("storage_total")}</span>
+              <span className="font-medium tabular-nums">{formatFileSize(quota.total)}</span>
+            </div>
+          </div>
+          <div className="mt-2.5 w-full bg-muted rounded-full h-1.5">
+            <div
+              className={cn(
+                "h-1.5 rounded-full transition-all",
+                level === "full"
+                  ? "bg-destructive"
+                  : level === "warn"
+                    ? "bg-warning"
+                    : "bg-success"
+              )}
+              style={{ width: `${usagePercent}%` }}
+            />
+          </div>
+          <p className="text-[0.625rem] text-muted-foreground mt-1 tabular-nums">
+            {Math.round(usagePercent)}% {t("storage_used").toLowerCase()}
+          </p>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+export function NavigationRail({
+  orientation = "vertical",
+  collapsed = false,
+  className,
+  quota,
+  onLogout,
+  onShowShortcuts,
+  onManageApps,
+  onInlineApp,
+  onCloseInlineApp,
+  activeAppId,
+  onNavigate,
+  activeItemId,
+  onOpenSearch,
+  adminActive = false,
+}: NavigationRailProps) {
+  const t = useTranslations("sidebar");
+  const tGlobalSearch = useTranslations("global_search");
+  // The phone tab bar: toasts sit above it.
+  const tabBarRef = useBottomControls(orientation === "horizontal");
+  const pathname = usePathname();
+  // Not while the page starts on "/" (see the hook).
+  const prefetchLinks = usePrefetchAfterStart(pathname) ? undefined : false;
+  // Each app draws its own tab bar, so its scroll position starts over: bring
+  // the current entry back into view when it lies past the edge of a full bar.
+  const tabBarScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    tabBarScrollRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [pathname]);
+  const [tabBarWidth, setTabBarWidth] = useState(0);
+  useEffect(() => {
+    const bar = tabBarScrollRef.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setTabBarWidth(bar.clientWidth));
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [orientation]);
+  const router = useRouter();
+  const { appLogoLightUrl, appLogoDarkUrl } = useConfig();
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
+  const { supportsCalendar } = useCalendarStore(useShallow((state) => ({ supportsCalendar: state.supportsCalendar })));
+  const client = useAuthStore((s) => s.client);
+  const supportsFiles = client?.supportsFiles() ?? false;
+  const supportsContacts = client?.supportsContacts() ?? false;
+  const showRailAccountList = useSettingsStore((s) => s.showRailAccountList);
+  const showAccessibilityButton = useSettingsStore((s) => s.showAccessibilityButton);
+  const simpleMode = useSettingsStore((s) => s.simpleMode);
+  const mountainView = useSettingsStore((s) => s.interfaceLayout === 'mountain-view');
+  const sidebarAppsEnabled = usePolicyStore((s) => s.isFeatureEnabled('sidebarAppsEnabled'));
+  const filesEnabled = usePolicyStore((s) => s.isFeatureEnabled('filesEnabled'));
+  const contactsEnabled = usePolicyStore((s) => s.isFeatureEnabled('contactsEnabled'));
+  const calendarEnabled = usePolicyStore((s) => s.isFeatureEnabled('calendarEnabled'));
+  // Operator-provided apps (#931) plus the user's own; the gate above only
+  // removes the user's, so a pinned set still shows when custom apps are off.
+  const visibleSidebarApps = useResolvedSidebarApps();
+  // Pages plugins added (api.ui.setPages); listed after the built-in apps.
+  const pluginPages = usePluginPages();
+  // Every signed-in account's inbox, as the favicon and the tab title count
+  // it (mail-6), unless Notifications says to count the open one only.
+  const inboxUnread = useAllInboxesUnread();
+  const isStalwartAdmin = useStalwartAdmin();
+  const hasUpdate = useUpdateStore(selectHasUpdate);
+  const updateSeverity = useUpdateStore((s) => s.status?.severity);
+  const startUpdatePolling = useUpdateStore((s) => s.startPolling);
+  useEffect(() => { startUpdatePolling(); }, [startUpdatePolling]);
+  const updateImportant = updateSeverity === 'security' || updateSeverity === 'deprecated';
+  const tShell = useTranslations("shell");
+  // Settings > Accessibility: the unread count as a number, as a dot, or not
+  // at all. A dot keeps the count in the link's name; hidden drops it too.
+  const unreadCountStyle = useSettingsStore((s) => s.unreadCountStyle);
+  const badgeShown = (item: NavItem) => item.badge != null && item.badge > 0 && unreadCountStyle !== 'hidden';
+  // "Mail, 3 unread": the badge itself is hidden from screen readers.
+  const itemName = (item: NavItem) =>
+    badgeShown(item) ? tShell("name_unread", { name: t(item.labelKey), count: item.badge ?? 0 }) : t(item.labelKey);
+  // Said with the admin entry; its dot alone is not announced.
+  const updateLabel = hasUpdate ? tShell(updateImportant ? "update_important" : "update_available") : null;
+
+  // Account list for rail
+  const accounts = useAccountStore((s) => s.accounts);
+  // Read activeAccountId from authStore so the rail's account row matches the actually-loaded
+  // session - accountStore has its own persisted copy that can drift out of sync.
+  const activeAccountId = useAuthStore((s) => s.activeAccountId);
+  const switchAccount = useAuthStore((s) => s.switchAccount);
+  const logout = useAuthStore((s) => s.logout);
+  const logoutAll = useAuthStore((s) => s.logoutAll);
+  // Sign out: the app's own menu, as every ⋮ and right-click has it.
+  const logoutMenu = useContextMenu<null>();
+  const logoutMenuOpen = logoutMenu.contextMenu.isOpen;
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+
+
+
+  const navItems: NavItem[] = [
+    { id: "mail", icon: Mail, labelKey: "mail", href: "/", badge: inboxUnread },
+    { id: "calendar", icon: CalendarEvent, labelKey: "calendar", href: "/calendar", hidden: !supportsCalendar || !calendarEnabled },
+    { id: "contacts", icon: Users, labelKey: "contacts", href: "/contacts", hidden: !supportsContacts || !contactsEnabled },
+    { id: "files", icon: Folder, labelKey: "files", href: "/files", hidden: !supportsFiles || !filesEnabled },
+  ];
+
+  // When the host (e.g. the Pro shell) takes over navigation via `onNavigate`,
+  // it tells us which item is active; otherwise we infer it from the URL.
+  const isSettingsActive = onNavigate
+    ? activeItemId === 'settings'
+    : !activeAppId && pathname.startsWith("/settings");
+
+  const visibleItems = navItems.filter((item) => !item.hidden);
+
+  // Leave the next page load's skeleton a note of what this rail shows
+  // (lib/boot-skeleton/hints.ts). Only once a session is up: before that the
+  // rail is still missing the apps the server offers.
+  const quotaShown = !!quota && quota.total > 0;
+  useEffect(() => {
+    if (!client) return;
+    const items: RailHint[] = [];
+    for (const item of navItems) if (item.id !== 'mail' && !item.hidden) items.push(item.id as RailHint);
+    if (sidebarAppsEnabled && onManageApps) items.push('add-app');
+    if (isStalwartAdmin) items.push('admin');
+    if (showAccessibilityButton) items.push('a11y');
+    if (quotaShown) items.push('quota');
+    writeRailHints(items);
+    // navItems is rebuilt every render; its inputs are listed instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, supportsCalendar, calendarEnabled, supportsContacts, contactsEnabled, supportsFiles, filesEnabled, sidebarAppsEnabled, !!onManageApps, isStalwartAdmin, showAccessibilityButton, quotaShown]);
+
+  const getIsActive = (href: string, itemId: string) => {
+    if (activeAppId) return false;
+    if (onNavigate) {
+      return activeItemId === itemId;
+    }
+    if (href === "/") {
+      // Mountain View's bottom bar marks the mail tab on mail routes too.
+      return pathname === "/" || pathname === "" || (mountainView && pathname.startsWith("/mail"));
+    }
+    return pathname.startsWith(href);
+  };
+
+  const handleNavClick = (itemId: 'mail' | 'calendar' | 'contacts' | 'files' | 'settings') =>
+    (e: React.MouseEvent) => {
+      if (interceptLeave(e)) return;
+      if (onNavigate) {
+        const intercepted = onNavigate(itemId);
+        if (intercepted !== false) {
+          e.preventDefault();
+        }
+        return;
+      }
+      if (activeAppId) {
+        onCloseInlineApp?.();
+      }
+    };
+
+  if (orientation === "horizontal") {
+    // Settings stays outside the part that scrolls: plugin pages and apps fill
+    // the bar, and the last entry must not end up off screen with nothing to
+    // say there is more. Sized by item count so all entries are equally wide.
+    const scrollingCount = visibleItems.length + pluginPages.length
+      + visibleSidebarApps.filter((app) => app.showOnMobile).length
+      + (isStalwartAdmin || adminActive ? 1 : 0);
+    const itemWidth = tabBarItemWidth(tabBarWidth, scrollingCount);
+    return (
+      <nav
+        ref={tabBarRef}
+        data-mobile-navigation=""
+        className={cn(
+          "flex items-center bg-background border-t border-border shrink-0 pb-[calc(env(safe-area-inset-bottom)/2)]",
+          mountainView && "min-h-16 border-t-0 bg-secondary shadow-[0_-1px_3px_rgb(0_0_0/0.08)]",
+          className
+        )}
+        role="navigation"
+        aria-label={t("nav_label")}
+      >
+        <div
+          ref={tabBarScrollRef}
+          data-mobile-navigation-scroll=""
+          className="flex items-center min-w-0 overflow-x-auto mobile-scroll-hidden"
+          style={{
+            flex: `${scrollingCount} 1 ${scrollingCount * 52}px`,
+            ...(itemWidth ? { "--tab-item-width": `${itemWidth}px` } as React.CSSProperties : {}),
+          }}
+        >
+        {visibleItems.map((item) => {
+          const isActive = getIsActive(item.href, item.id);
+          const Icon = item.icon;
+          return (
+            <Link
+              prefetch={prefetchLinks}
+              key={item.id}
+              href={item.href}
+              onClick={handleNavClick(item.id as 'mail' | 'calendar' | 'contacts' | 'files' | 'settings')}
+              data-tour={`nav-${item.id}`}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1 py-2 px-0.5 min-h-[44px] grow shrink-0 basis-[var(--tab-item-width,52px)]",
+                "transition-colors duration-150",
+                isActive
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={itemName(item)}
+            >
+              <div className={cn(
+                "relative",
+                mountainView && isActive && "min-w-14 rounded-full bg-primary/15 px-4 py-[3px]"
+              )}>
+                <Icon className="w-5 h-5" />
+                {badgeShown(item) && (unreadCountStyle === 'dot' ? (
+                  <span aria-hidden="true" data-testid="rail-unread-dot" className="absolute -top-0.5 -end-1 w-2.5 h-2.5 rounded-full bg-red-500" />
+                ) : (
+                  <span aria-hidden="true" className="absolute -top-1.5 -end-2.5 flex items-center justify-center min-w-[16px] h-4 text-[0.625rem] font-bold rounded-full bg-red-600 text-white px-1">
+                    {item.badge! > 99 ? "99+" : item.badge}
+                  </span>
+                ))}
+                {isActive && !mountainView && (
+                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-primary" />
+                )}
+              </div>
+              <span className="text-[0.625rem] font-medium leading-tight truncate max-w-full">{t(item.labelKey)}</span>
+            </Link>
+          );
+        })}
+
+        {/* Plugin pages, after the built-in apps */}
+        {pluginPages.map((page) => {
+          const isActive = !activeAppId && isPluginPageActive(pathname, page);
+          const PageIcon = iconForName(page.icon) ?? Puzzle;
+          return (
+            <Link
+              prefetch={prefetchLinks}
+              key={`plugin-page:${page.pluginId}:${page.id}`}
+              href={pluginPageHref(page)}
+              onClick={(e) => { if (interceptLeave(e)) return; if (activeAppId) onCloseInlineApp?.(); }}
+              data-plugin-page-link={`${page.pluginId}/${page.id}`}
+              title={page.pluginName}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1 py-2 px-0.5 min-h-[44px] grow shrink-0 basis-[var(--tab-item-width,52px)]",
+                "transition-colors duration-150",
+                isActive
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              aria-current={isActive ? "page" : undefined}
+            >
+              <div className={cn(
+                "relative",
+                mountainView && isActive && "min-w-14 rounded-full bg-primary/15 px-4 py-[3px]"
+              )}>
+                <PageIcon className="w-5 h-5" />
+                {isActive && !mountainView && (
+                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-primary" />
+                )}
+              </div>
+              <span className="text-[0.625rem] font-medium leading-tight truncate max-w-full">{page.title}</span>
+            </Link>
+          );
+        })}
+
+        {/* Custom sidebar apps (per-app mobile visibility) */}
+        {visibleSidebarApps.filter((app) => app.showOnMobile).map((app) => {
+          const isActive = activeAppId === app.id;
+          return (
+            <button
+              key={app.id}
+              onClick={() => {
+                if (isActive) {
+                  onCloseInlineApp?.();
+                } else if (app.openMode === 'tab') {
+                  window.open(app.url, '_blank', 'noopener,noreferrer');
+                } else {
+                  onInlineApp?.(app.id, app.url, app.name);
+                }
+              }}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1 py-2 px-0.5 min-h-[44px] grow shrink-0 basis-[var(--tab-item-width,52px)]",
+                "transition-colors duration-150",
+                isActive
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <div className="relative">
+                <SidebarAppIcon app={app} className="w-5 h-5" />
+                {isActive && (
+                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-primary" />
+                )}
+              </div>
+              <span className="text-[0.625rem] font-medium leading-tight truncate max-w-full">{app.name}</span>
+            </button>
+          );
+        })}
+
+        {/* Admin (Stalwart admins) - hard nav because /admin lives outside the [locale] tree */}
+        {(isStalwartAdmin || adminActive) && (
+          <a
+            href={`${getPathPrefix()}/admin`}
+            className={cn(
+              "flex flex-col items-center justify-center gap-1 py-2 px-0.5 min-h-[44px] grow shrink-0 basis-[var(--tab-item-width,52px)]",
+              "transition-colors duration-150",
+              adminActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
+            )}
+            aria-current={adminActive ? "page" : undefined}
+          >
+            <span className="relative">
+              <Shield className="w-5 h-5" />
+              {adminActive && !mountainView && (
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-primary" />
+              )}
+              {hasUpdate && (
+                <span
+                  className={cn(
+                    "absolute -top-0.5 -end-0.5 w-2 h-2 rounded-full ring-2 ring-background",
+                    updateImportant ? "bg-red-500" : "bg-amber-500",
+                  )}
+                  aria-hidden="true"
+                />
+              )}
+            </span>
+            <span className="text-[0.625rem] font-medium leading-tight truncate max-w-full">{t("admin") || "Admin"}</span>
+            {updateLabel && <span className="sr-only">{`, ${updateLabel}`}</span>}
+          </a>
+        )}
+
+        </div>
+
+        {/* Settings */}
+        <Link
+          prefetch={prefetchLinks}
+          href="/settings"
+          onClick={handleNavClick('settings')}
+          data-tour="nav-settings"
+          className={cn(
+            "flex flex-col items-center justify-center gap-1 py-2 px-0.5 min-h-[44px] grow shrink-0 basis-[52px]",
+            "transition-colors duration-150",
+            isSettingsActive
+              ? "text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+          aria-current={isSettingsActive ? "page" : undefined}
+        >
+          <div className="relative">
+            <Settings className="w-5 h-5" />
+            {isSettingsActive && (
+              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full bg-primary" />
+            )}
+          </div>
+          <span className="text-[0.625rem] font-medium leading-tight truncate max-w-full">{t("settings")}</span>
+        </Link>
+      </nav>
+    );
+  }
+
+  const quotaUsagePercent = quota && quota.total > 0 ? Math.min((quota.used / quota.total) * 100, 100) : 0;
+
+  return (
+    <div
+      className={cn(
+        // On a short window (a phone on its side) the whole rail scrolls: the
+        // pinned group at the bottom left the apps room for two icons.
+        "flex flex-col h-full scroll-hidden [@media(max-height:32rem)]:overflow-y-auto",
+        collapsed ? "items-center" : "",
+        className
+      )}
+    >
+      {(() => {
+        const logoUrl = withBasePath(resolvedTheme === 'dark' ? (appLogoDarkUrl || appLogoLightUrl) : (appLogoLightUrl || appLogoDarkUrl));
+        return logoUrl ? (
+          <div className="flex items-center justify-center py-3 px-1">
+            <img
+              src={logoUrl}
+              alt=""
+              className="w-8 h-8 object-contain"
+            />
+          </div>
+        ) : null;
+      })()}
+
+      <nav
+        data-window-rail=""
+        className={cn(
+          "flex flex-col flex-1 min-h-0 overflow-y-auto scroll-hidden [@media(max-height:32rem)]:flex-none [@media(max-height:32rem)]:overflow-visible",
+          collapsed ? "items-center gap-1 py-3 px-1" : "gap-0.5 py-2 px-2",
+        )}
+        role="navigation"
+        aria-label={t("nav_label")}
+      >
+        {onOpenSearch && (
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            data-tour="nav-search"
+            className={cn(
+              "relative flex items-center gap-2.5 rounded-md transition-colors duration-150 cursor-pointer",
+              collapsed ? "justify-center w-10 h-10" : "px-2.5 text-sm",
+              "tap:min-h-[44px]",
+              "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+            title={collapsed ? tGlobalSearch("title") : undefined}
+            style={collapsed ? undefined : { paddingBlock: 'var(--density-sidebar-py)' }}
+          >
+            <Search className="w-[18px] h-[18px] flex-shrink-0" />
+            {!collapsed && <span className="truncate">{tGlobalSearch("title")}</span>}
+          </button>
+        )}
+        {visibleItems.map((item) => {
+          const isActive = getIsActive(item.href, item.id);
+          const Icon = item.icon;
+          return (
+            <Link
+              prefetch={prefetchLinks}
+              key={item.id}
+              href={item.href}
+              onClick={handleNavClick(item.id as 'mail' | 'calendar' | 'contacts' | 'files' | 'settings')}
+              data-tour={`nav-${item.id}`}
+              className={cn(
+                "relative flex items-center gap-2.5 rounded-md transition-colors duration-150",
+                collapsed
+                  ? "justify-center w-10 h-10"
+                  : "px-2.5 text-sm",
+                "tap:min-h-[44px]",
+                isActive
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={itemName(item)}
+              title={collapsed ? t(item.labelKey) : undefined}
+              style={collapsed ? undefined : { paddingBlock: 'var(--density-sidebar-py)' }}
+            >
+              <Icon className={cn("w-[18px] h-[18px] flex-shrink-0", isActive && "text-primary")} />
+              {!collapsed && <span className="truncate">{t(item.labelKey)}</span>}
+              {badgeShown(item) && (unreadCountStyle === 'dot' ? (
+                <span aria-hidden="true" data-testid="rail-unread-dot" className={cn(
+                  "absolute w-2.5 h-2.5 rounded-full bg-red-500",
+                  collapsed ? "top-1 end-1" : "end-2.5"
+                )} />
+              ) : (
+                <span aria-hidden="true" className={cn(
+                  "absolute flex items-center justify-center min-w-[16px] h-4 text-[0.625rem] font-bold rounded-full bg-red-600 text-white px-1",
+                  collapsed ? "-top-0.5 -end-0.5" : "end-1.5"
+                )}>
+                  {item.badge! > 99 ? "99+" : item.badge}
+                </span>
+              ))}
+            </Link>
+          );
+        })}
+
+        {/* Plugin pages, after the built-in apps */}
+        {pluginPages.map((page) => {
+          const isActive = !activeAppId && isPluginPageActive(pathname, page);
+          const PageIcon = iconForName(page.icon) ?? Puzzle;
+          return (
+            <Link
+              prefetch={prefetchLinks}
+              key={`plugin-page:${page.pluginId}:${page.id}`}
+              href={pluginPageHref(page)}
+              onClick={(e) => { if (interceptLeave(e)) return; if (activeAppId) onCloseInlineApp?.(); }}
+              data-plugin-page-link={`${page.pluginId}/${page.id}`}
+              className={cn(
+                "relative flex items-center gap-2.5 rounded-md transition-colors duration-150",
+                collapsed
+                  ? "justify-center w-10 h-10"
+                  : "px-2.5 text-sm",
+                "tap:min-h-[44px]",
+                isActive
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={collapsed ? page.title : undefined}
+              title={collapsed ? `${page.title} (${page.pluginName})` : page.pluginName}
+              style={collapsed ? undefined : { paddingBlock: 'var(--density-sidebar-py)' }}
+            >
+              <PageIcon className={cn("w-[18px] h-[18px] flex-shrink-0", isActive && "text-primary")} />
+              {!collapsed && <span className="truncate">{page.title}</span>}
+            </Link>
+          );
+        })}
+
+        {/* Custom sidebar apps */}
+        {visibleSidebarApps.length > 0 && (
+          <div
+            className={cn(
+              "border-t",
+              collapsed ? "w-8 mx-auto my-1 pt-1" : "mx-2 my-0.5 pt-0.5"
+            )}
+            style={{ borderColor: 'rgba(128, 128, 128, 0.3)' }}
+          />
+        )}
+        {visibleSidebarApps.map((app) => {
+          const isActive = activeAppId === app.id;
+          return (
+            <button
+              key={app.id}
+              onClick={() => {
+                if (isActive) {
+                  onCloseInlineApp?.();
+                } else if (app.openMode === 'tab') {
+                  window.open(app.url, '_blank', 'noopener,noreferrer');
+                } else {
+                  onInlineApp?.(app.id, app.url, app.name);
+                }
+              }}
+              className={cn(
+                "relative flex items-center gap-2.5 rounded-md transition-colors duration-150",
+                collapsed
+                  ? "justify-center w-10 h-10"
+                  : "px-2.5 text-sm",
+                "tap:min-h-[44px]",
+                isActive
+                  ? "bg-primary/10 text-primary font-medium"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              title={collapsed ? app.name : undefined}
+              style={collapsed ? undefined : { paddingBlock: 'var(--density-sidebar-py)' }}
+            >
+              <SidebarAppIcon app={app} className={cn("w-[18px] h-[18px] flex-shrink-0", isActive && "text-primary")} />
+              {!collapsed && <span className="truncate">{app.name}</span>}
+            </button>
+          );
+        })}
+
+        {/* Manage apps button */}
+        {sidebarAppsEnabled && onManageApps && (
+          <button
+            onClick={onManageApps}
+            className={cn(
+              "relative flex items-center gap-2.5 rounded-md transition-colors duration-150",
+              collapsed
+                ? "justify-center w-10 h-10"
+                : "px-2.5 text-sm",
+              "tap:min-h-[44px]",
+              "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+            title={collapsed ? t("add_app") : undefined}
+            style={collapsed ? undefined : { paddingBlock: 'var(--density-sidebar-py)' }}
+          >
+            <Plus className="w-[18px] h-[18px] flex-shrink-0" />
+            {!collapsed && <span className="truncate">{t("add_app")}</span>}
+          </button>
+        )}
+      </nav>
+
+      <PluginSlot name="navigation-rail-bottom" />
+
+      {/* Footer: Admin + Settings + Help + Storage Quota + Sign Out + Push Status */}
+      <div className="mt-auto flex flex-col items-center gap-2 pb-3 px-1">
+        {(isStalwartAdmin || adminActive) && (
+          <a
+            href={`${getPathPrefix()}/admin`}
+            className={cn(
+              "flex items-center justify-center w-10 h-10 rounded-md transition-colors relative",
+              adminActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+            )}
+            title={t("admin") || "Admin"}
+            aria-label={updateLabel ? `${t("admin") || "Admin"}, ${updateLabel}` : undefined}
+            aria-current={adminActive ? "page" : undefined}
+          >
+            <Shield className="w-[18px] h-[18px]" />
+            {hasUpdate && (
+              <span
+                className={cn(
+                  "absolute top-2 end-2 w-2 h-2 rounded-full ring-2 ring-background",
+                  updateImportant ? "bg-red-500" : "bg-amber-500",
+                )}
+                aria-hidden="true"
+              />
+            )}
+          </a>
+        )}
+
+        <NotificationBell placement="side" className="w-10 h-10 rounded-md" />
+
+        {showAccessibilityButton && (
+          <button
+            type="button"
+            onClick={openAccessibilityPanel}
+            data-testid="rail-accessibility"
+            className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title={t("accessibility")}
+            aria-label={t("accessibility")}
+            aria-keyshortcuts="Alt+Shift+A"
+          >
+            <Accessibility className="w-[18px] h-[18px]" />
+          </button>
+        )}
+
+        <Link
+
+          prefetch={prefetchLinks}
+          href="/settings"
+          onClick={handleNavClick('settings')}
+          data-tour="nav-settings"
+          className={cn(
+            "flex items-center justify-center w-10 h-10 rounded-md transition-colors",
+            isSettingsActive
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:text-foreground hover:bg-muted"
+          )}
+          title={t("settings")}
+          aria-current={isSettingsActive ? "page" : undefined}
+        >
+          <Settings className="w-[18px] h-[18px]" />
+        </Link>
+
+        <div className="w-8 border-t" style={{ borderColor: 'rgba(128, 128, 128, 0.3)' }} />
+
+        {onShowShortcuts && (
+          <button
+            onClick={onShowShortcuts}
+            data-tour="nav-shortcuts"
+            className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title={t("keyboard_shortcuts")}
+          >
+            <Keyboard className="w-[18px] h-[18px]" />
+          </button>
+        )}
+        {!onShowShortcuts && (
+          <>
+            <button
+              onClick={() => setShowShortcutsModal(true)}
+              data-tour="nav-shortcuts"
+              className="flex items-center justify-center w-10 h-10 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={t("keyboard_shortcuts")}
+            >
+              <Keyboard className="w-[18px] h-[18px]" />
+            </button>
+            <LazyKeyboardShortcutsModal
+              isOpen={showShortcutsModal}
+              onClose={() => setShowShortcutsModal(false)}
+            />
+          </>
+        )}
+
+        {quota && quota.total > 0 && (
+          <div data-tour="storage-quota">
+            <StorageQuotaCircle quota={quota} usagePercent={quotaUsagePercent} />
+          </div>
+        )}
+
+        {onLogout && showRailAccountList && !simpleMode && accounts.length > 0 && (
+          <>
+            <div className="w-8 border-t my-1" style={{ borderColor: 'rgba(128, 128, 128, 0.3)' }} />
+
+            {/* Account circles */}
+            <div className="flex flex-col items-center gap-3">
+            {accounts.map((account) => {
+              const isActive = account.id === activeAccountId;
+              return (
+                <button
+                  key={account.id}
+                  onClick={() => {
+                    if (!isActive) switchAccount(account.id);
+                  }}
+                  className={cn(
+                    "relative w-8 h-8 rounded-full transition-all flex-shrink-0",
+                    isActive
+                      ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                      : "opacity-70 hover:opacity-100"
+                  )}
+                  title={`${toUnicodeEmail(account.displayName || account.label)} (${toUnicodeEmail(account.email || account.username)})`}
+                >
+                  <Avatar
+                    name={accountAvatarName(account, accounts)}
+                    email={account.email || account.username}
+                    size="sm"
+                    disableFavicon
+                    fallbackColor={account.avatarColor}
+                  />
+                  {isActive && (
+                    <span className="absolute -bottom-0.5 -end-0.5 w-3 h-3 rounded-full bg-primary flex items-center justify-center">
+                      <Check className="w-2 h-2 text-primary-foreground" />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {accounts.length < getMaxAccounts() && (
+              <button
+                onClick={() => router.push(`/login?mode=add-account` as never)}
+                className="flex items-center justify-center w-8 h-8 rounded-full border border-dashed border-muted-foreground/50 text-muted-foreground hover:border-foreground hover:text-foreground hover:bg-muted transition-colors flex-shrink-0"
+                title={t("add_account")}
+                aria-label={t("add_account")}
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
+            </div>
+
+            {/* Sign out, with a menu */}
+            <button
+              onClick={(ev) => (logoutMenuOpen ? logoutMenu.closeContextMenu() : logoutMenu.openContextMenuFrom(ev.currentTarget, null, "start"))}
+              className="flex items-center justify-center w-9 h-9 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={t("sign_out")}
+              aria-label={t("sign_out")}
+              aria-expanded={logoutMenuOpen}
+              aria-haspopup="menu"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+            <ContextMenu
+              ref={logoutMenu.menuRef}
+              isOpen={logoutMenuOpen}
+              position={logoutMenu.contextMenu.position}
+              onClose={logoutMenu.closeContextMenu}
+              label={t("sign_out")}
+            >
+              <ContextMenuItem icon={LogOut} label={t("sign_out")} onClick={() => { logoutMenu.closeContextMenu(); logout(); }} />
+              {accounts.length > 1 && (
+                <ContextMenuItem icon={LogOut} label={t("sign_out_all")} onClick={() => { logoutMenu.closeContextMenu(); logoutAll(); }} />
+              )}
+            </ContextMenu>
+          </>
+        )}
+
+        {onLogout && !showRailAccountList && (
+          <AccountSwitcher variant="rail" />
+        )}
+      </div>
+    </div>
+  );
+}

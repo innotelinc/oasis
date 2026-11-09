@@ -1,0 +1,394 @@
+"use client";
+
+import { useMemo, useRef, useCallback } from "react";
+import { useTranslations } from "next-intl";
+import { useDisplayDateFormatter } from "@/hooks/use-display-date-formatter";
+import { addDays, format, isTomorrow, startOfDay } from "date-fns";
+import { CalendarDays, MapPin, Users } from "@/components/icons";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
+import { getEventColor } from "./event-card";
+import { getEventDayBounds, getEventEndDate, getEventStartDate, getPrimaryCalendarId } from "@/lib/calendar-utils";
+import { displayNow, isDisplayToday } from "@/lib/timezone";
+import { getParticipantCount, isDeclinedByUser } from "@/lib/calendar-participants";
+import { useScrollWindow } from "@/hooks/use-scroll-window";
+import type { ScrollWindowViewProps } from "@/lib/calendar-scroll-window";
+import type { CalendarEvent, Calendar } from "@/lib/jmap/types";
+import { useCvdColor } from "@/hooks/use-cvd-color";
+import { useEventUserEmails } from "@/hooks/use-event-user-emails";
+import { gridReplyState } from "@/lib/calendar-reply-state";
+import { readableTextOn } from "@/lib/color-transform";
+import { useCollectionNames } from "@/hooks/use-collection-names";
+
+interface CalendarAgendaViewProps extends ScrollWindowViewProps {
+  events: CalendarEvent[];
+  calendars: Calendar[];
+  onSelectEvent: (event: CalendarEvent, anchorRect: DOMRect) => void;
+  onHoverEvent?: (event: CalendarEvent, anchorRect: DOMRect) => void;
+  onHoverLeave?: () => void;
+  onContextMenuEvent?: (e: React.MouseEvent, event: CalendarEvent) => void;
+  /** The "Reply" button of an unanswered invitation (pim-9). */
+  onReplyEvent?: (anchor: HTMLElement, event: CalendarEvent) => void;
+  timeFormat?: "12h" | "24h";
+  /** The user's calendar addresses, to mark events they declined (#1110). */
+  currentUserEmails?: string[];
+  /** Offered on an empty agenda: make the first event. */
+  onCreateEvent?: () => void;
+}
+
+interface DayGroup {
+  date: Date;
+  dateKey: string;
+  events: CalendarEvent[];
+}
+
+/**
+ * How a timed event reads on one day of the list (pim-p3-16): its range on
+ * the day it starts, "until 07:30" on the day an overnight one ends, "All
+ * day" on a day it covers whole. `sortAt` places it in that day's list: an
+ * event going on from the day before sorts by its end there, not by a start
+ * the day before.
+ */
+export function agendaDayPart(event: CalendarEvent, day: Date): { kind: "all-day" | "range" | "until"; sortAt: number } {
+  const dayStart = startOfDay(day);
+  if (event.showWithoutTime) return { kind: "all-day", sortAt: dayStart.getTime() - 1 };
+  const start = getEventStartDate(event);
+  const end = getEventEndDate(event);
+  if (start >= dayStart) return { kind: "range", sortAt: start.getTime() };
+  const nextDay = addDays(dayStart, 1);
+  if (end >= nextDay) return { kind: "all-day", sortAt: dayStart.getTime() - 1 };
+  return { kind: "until", sortAt: end.getTime() };
+}
+
+export function CalendarAgendaView({
+  focus,
+  events,
+  calendars,
+  rangeStart,
+  rangeEnd,
+  windowKey,
+  onExtendStart,
+  onExtendEnd,
+  isLoading = false,
+  onSelectEvent,
+  onHoverEvent,
+  onHoverLeave,
+  onContextMenuEvent,
+  onReplyEvent,
+  timeFormat = "24h",
+  currentUserEmails,
+  onCreateEvent,
+}: CalendarAgendaViewProps) {
+  const t = useTranslations("calendar");
+  const tEvent = useTranslations("ux_pim_event");
+  const tGrid = useTranslations("ux_pim_grid");
+  const tCal = useTranslations("ux_p3_pim_cal");
+  const shownName = useCollectionNames();
+  const paint = useCvdColor();
+  // An event of another signed-in login is read with that login's addresses.
+  const userEmailsFor = useEventUserEmails(currentUserEmails ?? []);
+  // Grid days / event dates are display dates (local fields = wall-clock in
+  // the user's zone); the app-wide formatter would shift them again (#755).
+  const intlFormatter = useDisplayDateFormatter();
+
+  const calendarMap = useMemo(() => {
+    const map = new Map<string, Calendar>();
+    calendars.forEach((c) => map.set(c.id, c));
+    return map;
+  }, [calendars]);
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const bottomSentinelRef = useRef<HTMLDivElement>(null);
+
+  const hasEvents = events.length > 0;
+  const grouped = useMemo(() => {
+    const sorted = [...events].sort((a, b) =>
+      getEventStartDate(a).getTime() - getEventStartDate(b).getTime()
+    );
+
+    const groups: DayGroup[] = [];
+    const groupMap = new Map<string, DayGroup>();
+
+    sorted.forEach((ev) => {
+      try {
+        const { startDay, endDay } = getEventDayBounds(ev);
+        const cursor = new Date(startDay);
+        while (cursor <= endDay) {
+          const key = format(cursor, "yyyy-MM-dd");
+          let group = groupMap.get(key);
+          if (!group) {
+            group = { date: new Date(cursor), dateKey: key, events: [] };
+            groupMap.set(key, group);
+            groups.push(group);
+          }
+          group.events.push(ev);
+          cursor.setDate(cursor.getDate() + 1);
+        }
+      } catch { /* skip invalid dates */ }
+    });
+
+    // Keep a "Today" row as an anchor, but only when today is actually part
+    // of the loaded window - otherwise it would claim there is nothing on a
+    // day that was never fetched.
+    const today = startOfDay(displayNow());
+    const todayKey = format(today, "yyyy-MM-dd");
+    if (!groupMap.has(todayKey) && today >= startOfDay(rangeStart) && today <= rangeEnd) {
+      const todayGroup = { date: today, dateKey: todayKey, events: [] as CalendarEvent[] };
+      groupMap.set(todayKey, todayGroup);
+      groups.push(todayGroup);
+    }
+
+    groups.sort((a, b) => a.date.getTime() - b.date.getTime());
+    for (const group of groups) {
+      group.events.sort((a, b) => agendaDayPart(a, group.date).sortAt - agendaDayPart(b, group.date).sortAt);
+    }
+    return groups;
+  }, [events, rangeStart, rangeEnd]);
+
+  // The focus row is the first day at or after the focused day: where the
+  // list starts out, and where "Today" brings the user back to.
+  const focusKey = format(focus.date, "yyyy-MM-dd");
+  const focusIndex = grouped.findIndex((group) => group.dateKey >= focusKey);
+  const focusRowRef = useRef<HTMLDivElement>(null);
+  const scrollToFocus = useCallback(() => {
+    const el = scrollContainerRef.current;
+    const target = focusRowRef.current;
+    if (!el) return;
+    el.scrollTop = target
+      ? el.scrollTop + target.getBoundingClientRect().top - el.getBoundingClientRect().top
+      : 0;
+  }, []);
+
+  const { requestStart, pendingSide } = useScrollWindow({
+    scrollRef: scrollContainerRef,
+    axis: "vertical",
+    isLoading,
+    windowKey,
+    focusNonce: focus.nonce,
+    scrollToFocus,
+    onExtendStart,
+    onExtendEnd,
+    endSentinelRef: bottomSentinelRef,
+    contentKey: grouped,
+    anchorSelector: "[data-agenda-day]",
+  });
+
+  // Wheeling up while already at the top reaches for earlier days. Touch
+  // users (and anyone whose list is too short to scroll) have the button.
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY < 0 && e.currentTarget.scrollTop <= 0) requestStart();
+  }, [requestStart]);
+
+  const formatDateHeader = (date: Date): string => {
+    if (isDisplayToday(date)) return t("events.today_header");
+    if (isTomorrow(date)) return t("events.tomorrow_header");
+    return intlFormatter.dateTime(date, { weekday: "long", month: "long", day: "numeric" });
+  };
+
+  const formatTime = (date: Date): string => {
+    if (timeFormat === "12h") {
+      return intlFormatter.dateTime(date, { hour: "numeric", minute: "2-digit", hour12: true });
+    }
+    return format(date, "HH:mm");
+  };
+
+  const formatRangeDate = (date: Date): string =>
+    intlFormatter.dateTime(date, { month: "short", day: "numeric", year: "numeric" });
+
+  const loadingPast = isLoading && pendingSide === "start";
+
+  return (
+    <div
+      className="flex-1 overflow-y-auto [overflow-anchor:none] max-md:pb-14"
+      ref={scrollContainerRef}
+      onWheel={handleWheel}
+    >
+      <div className="px-4 py-2 text-center text-xs text-muted-foreground">
+        {onExtendStart ? (
+          <button
+            type="button"
+            onClick={requestStart}
+            disabled={isLoading}
+            className="rounded-md px-2 py-1 hover:bg-muted hover:text-foreground disabled:opacity-60"
+          >
+            {loadingPast ? t("events.agenda_loading") : t("events.agenda_show_earlier")}
+          </button>
+        ) : (
+          <span>{t("events.agenda_range_start", { date: formatRangeDate(rangeStart) })}</span>
+        )}
+      </div>
+
+      {/* Nothing in the loaded window: one empty state with the way out,
+          not a lone "Today" row. */}
+      {!hasEvents && !isLoading && (
+        <EmptyState
+          compact
+          icon={CalendarDays}
+          title={t("events.no_events")}
+          actions={onCreateEvent ? <Button size="sm" onClick={onCreateEvent}>{t("events.new_event")}</Button> : undefined}
+        />
+      )}
+
+      {hasEvents && grouped.map((group, index) => {
+        const today = isDisplayToday(group.date);
+        const relativeLabel = today
+          ? t("events.today_header")
+          : isTomorrow(group.date) ? t("events.tomorrow_header") : null;
+        return (
+        <div
+          key={group.dateKey}
+          ref={index === focusIndex ? focusRowRef : undefined}
+          data-agenda-day={group.dateKey}
+          className="flex items-start gap-2 px-2 sm:px-4 py-1.5 border-b border-border"
+          aria-label={formatDateHeader(group.date)}
+          role="group"
+        >
+          {/* The date sits on the left of its events, as in a schedule. */}
+          <div className="sticky top-0 flex items-center gap-2 w-24 sm:w-32 flex-shrink-0 py-1.5">
+            <span className={cn(
+              "inline-flex items-center justify-center w-9 h-9 rounded-full text-xl flex-shrink-0",
+              today ? "bg-primary text-primary-foreground font-semibold" : "text-foreground",
+            )}>
+              {intlFormatter.dateTime(group.date, { day: "numeric" })}
+            </span>
+            <span className="min-w-0 leading-tight">
+              <span className={cn(
+                "block text-[0.6875rem] font-medium break-words first-letter:uppercase",
+                today ? "text-primary" : "text-muted-foreground",
+              )}>
+                {intlFormatter.dateTime(group.date, { month: "short", weekday: "short" })}
+              </span>
+              {relativeLabel && (
+                <span className={cn("block text-[0.6875rem] truncate", today ? "text-primary" : "text-muted-foreground")}>
+                  {relativeLabel}
+                </span>
+              )}
+            </span>
+          </div>
+
+          {group.events.length === 0 ? (
+            <div className="flex-1 py-3.5 text-sm text-muted-foreground">
+              {t("events.no_events")}
+            </div>
+          ) : (
+          <div className="flex-1 min-w-0 py-0.5">
+            {group.events.map((ev) => {
+              const calId = getPrimaryCalendarId(ev);
+              const calendar = calId ? calendarMap.get(calId) : undefined;
+              const color = paint(getEventColor(ev, calendar));
+              const start = getEventStartDate(ev);
+              const end = getEventEndDate(ev);
+              // iTIP CANCEL marks the attendee's copy with status "cancelled"
+              // instead of deleting it (#572); a declined invitation stays
+              // listed too (#1110).
+              const userEmails = userEmailsFor(ev);
+              const isInactive = ev.status === "cancelled" || isDeclinedByUser(ev, userEmails);
+              // Not answered yet: a hollow dot and "Reply"; maybe: a dashed ring (pim-9).
+              const replyState = isInactive ? null : gridReplyState(ev, userEmails);
+              const locationName = ev.locations
+                ? Object.values(ev.locations)[0]?.name
+                : null;
+              const meta = [locationName, calendar ? shownName.calendar(calendar) : null].filter(Boolean).join(" · ");
+
+              const row = (
+                <button
+                  key={ev.id}
+                  data-reply-state={replyState ?? undefined}
+                  onClick={(e) => onSelectEvent(ev, e.currentTarget.getBoundingClientRect())}
+                  onMouseEnter={(e) => onHoverEvent?.(ev, e.currentTarget.getBoundingClientRect())}
+                  onMouseLeave={() => onHoverLeave?.()}
+                  onContextMenu={onContextMenuEvent ? (e) => onContextMenuEvent(e, ev) : undefined}
+                  className={cn(
+                    "w-full flex flex-wrap min-[30rem]:flex-nowrap items-start gap-x-3 gap-y-0.5 px-2 rounded-md hover:bg-muted/60 transition-colors text-start",
+                    replyState === "needs-action" && onReplyEvent && "pe-24",
+                  )}
+                  style={{ paddingBlock: 'var(--density-item-py)' }}
+                >
+                  {/* On a phone the time takes a line of its own: beside the date column it left the title two words. */}
+                  <span className="basis-full min-[30rem]:basis-auto min-[30rem]:w-28 sm:w-32 flex-shrink-0 text-sm text-muted-foreground tabular-nums">
+                    {(() => {
+                      const part = agendaDayPart(ev, group.date).kind;
+                      if (part === "all-day") return t("events.all_day");
+                      if (part === "until") return tCal("agenda_until", { time: formatTime(end) });
+                      return <bdi dir="ltr">{`${formatTime(start)} – ${formatTime(end)}`}</bdi>;
+                    })()}
+                  </span>
+
+                  {/* Calendar colour as a dot on the title line; hollow when
+                      declined or cancelled (repos/branding/APP.md). */}
+                  <span
+                    className="w-[9px] h-[9px] mt-[5.5px] rounded-full flex-shrink-0"
+                    style={replyState === "tentative"
+                      ? { border: `1.5px dashed ${color}` }
+                      : isInactive || replyState
+                        ? { boxShadow: `inset 0 0 0 1.5px ${color}` }
+                        : { backgroundColor: color }}
+                    data-agenda-dot={replyState ?? (isInactive ? "inactive" : "filled")}
+                    aria-hidden="true"
+                  />
+
+                  <div className="flex-1 min-w-0">
+                    {/* Sized to the title, which keeps its own direction: it sits at
+                        the start of the row and is cut at its own end. */}
+                    <div className="flex min-w-0">
+                      <span dir="auto" className={cn("text-sm font-medium truncate", isInactive && "line-through text-muted-foreground")} title={ev.title || t("events.no_title")}>
+                        {ev.title || t("events.no_title")}
+                      </span>
+                      {replyState && (
+                        <span className="ms-2 flex-shrink-0 text-xs text-muted-foreground">
+                          {tEvent(replyState === "tentative" ? "status_tentative" : "status_needs_action")}
+                        </span>
+                      )}
+                    </div>
+                    {(meta || getParticipantCount(ev) > 0) && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 min-w-0">
+                        {locationName && <MapPin className="w-3 h-3 flex-shrink-0" />}
+                        {meta && <span dir="auto" className="truncate" title={meta}>{meta}</span>}
+                        {getParticipantCount(ev) > 0 && (
+                          <span className="flex items-center gap-1 flex-shrink-0">
+                            <Users className="w-3 h-3" />
+                            {getParticipantCount(ev)}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              );
+              if (replyState !== "needs-action" || !onReplyEvent) return row;
+              // The answers, next to the row rather than inside its button.
+              return (
+                <div key={ev.id} className="relative">
+                  {row}
+                  <button
+                    type="button"
+                    data-reply-marker
+                    title={tGrid("reply_to_invitation")}
+                    onClick={(e) => { e.stopPropagation(); onReplyEvent(e.currentTarget, ev); }}
+                    className="absolute end-2 top-1 h-6 max-w-20 truncate rounded-xs px-2 text-xs font-semibold hover:opacity-90"
+                    style={{ backgroundColor: color, color: readableTextOn(color) }}
+                  >
+                    {tGrid("reply")}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          )}
+        </div>
+        );
+      })}
+
+      <div
+        ref={bottomSentinelRef}
+        data-testid="agenda-bottom-sentinel"
+        className="px-4 py-3 text-center text-xs text-muted-foreground"
+      >
+        {onExtendEnd
+          ? (isLoading && pendingSide === "end" ? t("events.agenda_loading") : " ")
+          : t("events.agenda_range_end", { date: formatRangeDate(rangeEnd) })}
+      </div>
+    </div>
+  );
+}

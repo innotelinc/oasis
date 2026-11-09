@@ -1,0 +1,1711 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@import "./theme-inline.css";
+@import "./accessibility.css";
+@import "./boot-skeleton.css";
+
+/* The app's font stack replaces Tailwind's default --font-sans, so the
+   font-sans utility and body use the same stack, and a theme's
+   typography.fontSans (compiled to --font-sans on :root) restyles both. */
+/* The layout breakpoint (PHONE_BELOW in hooks/use-media-query.ts): below
+   37.5rem (600px) the phone layout, from there up the desktop layout, compact
+   up to lg. `desk:` and `max-desk:` decide what is drawn (rail or bottom bar,
+   sidebar in the flow or as a drawer, panes side by side or one at a time);
+   md: and lg: stay for spacing and type sizes. */
+@theme {
+  --breakpoint-desk: 37.5rem;
+}
+
+/* Rows and buttons sized for a finger (44px): on phones, and on touch screens
+   below the full desktop, which get the compact desktop layout. A mouse in a
+   narrow window keeps the desktop's row heights. */
+@custom-variant tap {
+  @media (width < 37.5rem) {
+    @slot;
+  }
+  @media (width < 64rem) and (pointer: coarse) {
+    @slot;
+  }
+}
+
+@theme {
+  --font-sans:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans Thai",
+    "Leelawadee UI",
+    Tahoma,
+    sans-serif;
+}
+
+:root {
+  font-size: var(--font-size-base);
+
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #2563eb;
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  /* --brand-* come from the host's DOMAIN_BRANDING palette, when it has one. */
+  --color-primary: var(--brand-primary, #185aea);
+  --color-primary-foreground: var(--brand-primary-foreground, #ffffff);
+  --color-secondary: #f8fafc;
+  --color-secondary-foreground: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #59687c;
+  --color-accent: var(--brand-accent, #dbeafe);
+  --color-accent-foreground: var(--brand-accent-foreground, #1e40af);
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+
+  /* Sidebar */
+  --color-sidebar: #f8fafc;
+  --color-sidebar-foreground: #0f172a;
+  --color-sidebar-border: #e2e8f0;
+  --color-sidebar-accent: #f1f5f9;
+  --color-sidebar-accent-foreground: #0f172a;
+
+  /* Card */
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+
+  /* Semantic status colors */
+  --color-success: #22c55e;
+  --color-success-foreground: #ffffff;
+  --color-warning: #eab308;
+  --color-warning-foreground: #ffffff;
+  --color-info: #3b82f6;
+  --color-info-foreground: #ffffff;
+
+  /* Selection states */
+  --color-selection: var(--brand-accent, #dbeafe);
+  --color-selection-foreground: var(--brand-accent-foreground, #1e40af);
+
+  /* Unread indicator */
+  --color-unread: var(--brand-primary, #3b82f6);
+
+  /* Chart colors */
+  --color-chart-1: #3b82f6;
+  --color-chart-2: #22c55e;
+  --color-chart-3: #f59e0b;
+  --color-chart-4: #ef4444;
+  --color-chart-5: #8b5cf6;
+
+  /* Settings variables. The text size is a percentage of the browser's own
+     default, so the browser's font size setting still counts (EN 301 549
+     9.7); Settings > Accessibility multiplies it. */
+  --font-size-base: 100%;
+  --list-item-height: 48px;
+  --transition-duration: 0.2s;
+
+  /* Density spacing variables (defaults = regular) */
+  --density-item-py: 12px;
+  --density-item-gap: 12px;
+  --density-header-py: 12px;
+  --density-card-p: 16px;
+  --density-sidebar-py: 4px;
+
+  /* Minimum height of a tappable list row where folder rows use
+   * tap:min-h-[44px]. Plugin frames get it as a variable because their own
+   * viewport is the frame, not the page. */
+  --touch-row-min-h: 0px;
+}
+
+@media (width < 37.5rem), (width < 64rem) and (pointer: coarse) {
+  :root {
+    --touch-row-min-h: 44px;
+  }
+}
+
+.dark {
+  --color-border: rgba(128, 128, 128, 0.3);
+  --color-input: #262626;
+  --color-ring: #d4d4d4;
+  --color-background: #0a0a0a;
+  --color-foreground: #fafafa;
+  --color-primary: var(--brand-dark-primary, #fafafa);
+  --color-primary-foreground: var(--brand-dark-primary-foreground, #171717);
+  --color-secondary: #262626;
+  --color-secondary-foreground: #fafafa;
+  --color-muted: #262626;
+  --color-muted-foreground: #adadad;
+  --color-accent: var(--brand-dark-accent, #1e3a8a);
+  --color-accent-foreground: var(--brand-dark-accent-foreground, #dbeafe);
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #0a0a0a;
+  --color-popover: #1c1c1c;
+  --color-popover-foreground: #fafafa;
+
+  /* Sidebar */
+  --color-sidebar: #0a0a0a;
+  --color-sidebar-foreground: #fafafa;
+  --color-sidebar-border: #262626;
+  --color-sidebar-accent: #1a1a1a;
+  --color-sidebar-accent-foreground: #fafafa;
+
+  /* Card */
+  --color-card: #141414;
+  --color-card-foreground: #fafafa;
+
+  /* Semantic status colors */
+  --color-success: #16a34a;
+  --color-success-foreground: #ffffff;
+  --color-warning: #ca8a04;
+  --color-warning-foreground: #ffffff;
+  --color-info: #60a5fa;
+  --color-info-foreground: #ffffff;
+
+  /* Selection states */
+  --color-selection: rgba(59, 130, 246, 0.25);
+  --color-selection-foreground: #93c5fd;
+
+  /* Unread indicator */
+  --color-unread: var(--brand-dark-primary, #60a5fa);
+
+  /* Chart colors */
+  --color-chart-1: #60a5fa;
+  --color-chart-2: #4ade80;
+  --color-chart-3: #fbbf24;
+  --color-chart-4: #f87171;
+  --color-chart-5: #a78bfa;
+}
+
+/* A colour bar along an element's start edge: --start-bar is its colour,
+   --start-bar-width its width (3px). A thick border on a rounded element
+   curves on its inner side too; this bar is a background stripe, so only the
+   element's own outer corners round it and its inner edge stays straight.
+   It lies over the element's padding (and a transparent start border). */
+@utility start-bar {
+  background-image: linear-gradient(var(--start-bar), var(--start-bar));
+  background-origin: border-box;
+  background-position: left top;
+  background-repeat: no-repeat;
+  background-size: var(--start-bar-width, 3px) 100%;
+
+  &:dir(rtl) {
+    background-position: right top;
+  }
+}
+
+/* A tag lozenge's tint (KEYWORD_PALETTE fill): the hue at 10%, laid over the
+   page background rather than over whatever is behind the tag. A
+   see-through bg-amber-500/10 took on the row's colour, so on an unread,
+   selected or hovered row the tag text fell below 4.5:1. On the plain page
+   it looks the same as before. */
+@utility tag-fill-* {
+  --tag-fill: --alpha(--value(--color-*) / 10%);
+  background-color: var(--color-background);
+  background-image: linear-gradient(var(--tag-fill), var(--tag-fill));
+}
+
+
+/* The default border colour. In the base layer, so a border colour utility
+   (border-primary, border-transparent, border-destructive, border-input)
+   wins over it; unlayered, it outranked every utility and drew them grey. */
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  /* A placeholder or value too long for a narrow field ends in "…" instead of
+     stopping mid-word ("Termine durchs"), so it's clear there's more. */
+  input {
+    text-overflow: ellipsis;
+  }
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-feature-settings:
+    "rlig" 1,
+    "calt" 1;
+}
+
+/* Native <select> option lists are painted by the browser, not by the
+   Tailwind classes on the control, so they only honour color-scheme and an
+   explicit option colour. Themes whose --color-muted is translucent (Aurora
+   Glass dark: rgba(255,255,255,0.05)) composited to a light popup with
+   near-white text (#999). Pin options to the popover tokens, which every
+   theme defines as an opaque surface, and let dark themes ask the browser
+   for a dark popup where option colours are ignored (Safari). */
+option {
+  background-color: var(--color-popover);
+  color: var(--color-popover-foreground);
+}
+
+/* The group labels (the From dropdown's accounts) are painted the same way.
+   Without colours of their own they kept the control's text colour on the
+   popup's base, which a transparent control leaves light: in dark themes,
+   light text on a white bar. */
+optgroup {
+  background-color: var(--color-popover);
+  color: var(--color-popover-foreground);
+}
+
+.dark select {
+  color-scheme: dark;
+}
+
+/* Tailwind v4's preflight no longer gives buttons a pointer cursor, so most
+   controls showed the arrow. Give everything clickable the pointer again, and
+   disabled controls not-allowed, as the components that style it themselves
+   already do. This sits in the base layer so a cursor utility on a component
+   (cursor-grab, cursor-text, disabled:cursor-default) still wins. */
+@layer base {
+  button:not(:disabled),
+  select:not(:disabled),
+  input:is([type="checkbox"], [type="radio"], [type="color"]):not(:disabled),
+  summary,
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]),
+  [role="checkbox"]:not([aria-disabled="true"]),
+  [role="radio"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="menuitemcheckbox"]:not([aria-disabled="true"]),
+  [role="menuitemradio"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  input:is([type="checkbox"], [type="radio"], [type="color"]):disabled,
+  [role="button"][aria-disabled="true"],
+  [role="tab"][aria-disabled="true"],
+  [role="switch"][aria-disabled="true"],
+  [role="checkbox"][aria-disabled="true"],
+  [role="radio"][aria-disabled="true"],
+  [role="option"][aria-disabled="true"],
+  [role="menuitem"][aria-disabled="true"],
+  [role="menuitemcheckbox"][aria-disabled="true"],
+  [role="menuitemradio"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
+/* Minimalist scrollbar, unless the user asked for the browser's own wider
+   one in Settings > Accessibility: Chromium draws its native scrollbar only
+   while no ::-webkit-scrollbar rule matches. */
+:root:not([data-native-scrollbars="on"]) ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:root:not([data-native-scrollbars="on"]) ::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+:root:not([data-native-scrollbars="on"]) ::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 9999px;
+}
+
+:root:not([data-native-scrollbars="on"]) ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted-foreground);
+}
+
+/* The folded folder column (components/layout/sidebar.tsx) leaves its 48px
+   to the icons: a 4px scrollbar, in a gutter kept on both sides. */
+:root:not([data-native-scrollbars="on"]) [data-folder-rail]::-webkit-scrollbar {
+  width: 4px;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  :root:not([data-native-scrollbars="on"]) [data-folder-rail] {
+    scrollbar-width: thin;
+  }
+}
+
+/* Enhanced Email Content Styling */
+
+.email-content-wrapper {
+  min-width: 100%;
+}
+
+/* Forces light-theme CSS variables inside the email content area, so when
+   "Always Show Emails in Light Mode" is enabled in dark theme the surrounding
+   sender info / attachments / plain-text body don't end up with light text
+   on a white background. */
+.email-content-light {
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #64748b;
+  --color-border: #e2e8f0;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  --color-secondary: #f8fafc;
+  --color-secondary-foreground: #0f172a;
+  --color-accent: var(--brand-accent, #dbeafe);
+  --color-accent-foreground: var(--brand-accent-foreground, #1e40af);
+  --color-input: #e2e8f0;
+}
+
+.email-content-light .email-content-text a {
+  color: #2563eb;
+}
+
+.email-content-text {
+  padding: 1rem 1.25rem;
+}
+
+@media (max-width: 640px) {
+  .email-content-text {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}
+
+.email-content-text a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.dark .email-content-text a {
+  color: #60a5fa;
+}
+
+.email-content {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--color-foreground);
+  max-width: none;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  padding: 1rem 1.25rem;
+}
+
+/* Remove padding for rich HTML emails with table-based layouts */
+.email-content:has(> table) {
+  padding: 0;
+}
+
+.email-content p {
+  margin: 0.75rem 0;
+}
+
+.email-content a {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.email-content a:hover {
+  text-decoration: underline;
+  color: var(--color-accent-foreground);
+}
+
+.email-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.375rem;
+  margin: 1rem 0;
+  display: block;
+}
+
+.email-content blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: var(--color-muted-foreground);
+  font-style: italic;
+}
+
+.email-content pre {
+  background-color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  padding: 1rem;
+  font-family: "SF Mono", Monaco, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.email-content code {
+  background-color: var(--color-muted);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-family: "SF Mono", Monaco, Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  color: var(--color-destructive);
+}
+
+.email-content h1,
+.email-content h2,
+.email-content h3,
+.email-content h4 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-foreground);
+}
+
+.email-content h1 {
+  font-size: 1.5rem;
+}
+.email-content h2 {
+  font-size: 1.25rem;
+}
+.email-content h3 {
+  font-size: 1.125rem;
+}
+.email-content h4 {
+  font-size: 1rem;
+}
+
+.email-content ul,
+.email-content ol {
+  margin: 1rem 0;
+  padding-left: 1.75rem;
+}
+
+.email-content li {
+  margin: 0.375rem 0;
+  line-height: 1.6;
+}
+
+.email-content ul li {
+  list-style-type: disc;
+}
+
+.email-content ol li {
+  list-style-type: decimal;
+}
+
+/* Reply quoted HTML - preserves original inline styles/colors */
+.email-reply-quote {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  max-width: none;
+}
+
+.email-reply-quote p {
+  margin: 0.5rem 0;
+}
+
+.email-reply-quote img {
+  max-width: 100%;
+  height: auto;
+}
+
+.email-reply-quote a {
+  text-decoration: underline;
+}
+
+/* Only style tables that are actual data tables, not layout tables */
+.email-content table.data-table,
+.email-content table[border="1"] {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+}
+
+.email-content table.data-table th,
+.email-content table.data-table td,
+.email-content table[border="1"] th,
+.email-content table[border="1"] td {
+  padding: 0.625rem;
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.email-content table.data-table th,
+.email-content table[border="1"] th {
+  background-color: var(--color-muted);
+  font-weight: 600;
+  color: var(--color-foreground);
+}
+
+/* Reset styles for layout tables (commonly used in HTML emails) */
+.email-content table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* Let HTML email's own styles take precedence */
+.email-content table:not(.data-table):not([border="1"]) {
+  border: initial;
+}
+
+.email-content table:not(.data-table):not([border="1"]) td,
+.email-content table:not(.data-table):not([border="1"]) th {
+  border: initial;
+  padding: initial;
+}
+
+.email-content hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 1.5rem 0;
+}
+
+/* Email thread quoted text */
+.email-content .quoted-text {
+  border-left: 3px solid var(--color-border);
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: var(--color-muted-foreground);
+  opacity: 0.8;
+}
+
+/* Toast animations. They slide in from the end edge: --toast-slide is -1 in RTL. */
+@keyframes toast-enter {
+  from {
+    transform: translateX(calc((100% + 1.25rem) * var(--toast-slide, 1)));
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(calc((100% + 1.25rem) * var(--toast-slide, 1)));
+    opacity: 0;
+  }
+}
+
+@keyframes toast-progress {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.toast-enter {
+  animation: toast-enter 0.32s cubic-bezier(0.21, 1.02, 0.73, 1) forwards;
+}
+
+.toast-exit {
+  animation: toast-exit 0.28s cubic-bezier(0.06, 0.71, 0.55, 1) forwards;
+}
+
+/* The reader toolbar with no room for its labels: icons only, the names stay in the tooltips.
+   "secondary" keeps the names of Reply, Reply all, Forward, Archive, Delete and Move; the
+   other buttons go into the More menu before those names go (mail-p2-15). */
+[data-toolbar-compact="secondary"] [data-toolbar-label]:not([data-toolbar-label="primary"]),
+[data-toolbar-compact="all"] [data-toolbar-label] {
+  display: none !important;
+}
+
+/* Mobile Responsive Utilities */
+
+/*
+ * An installed app or the desktop app with no native title bar. No row is kept
+ * for it: --titlebar-inset is 0, and the app's columns run to the top of the
+ * window. The window's controls sit in the top row of the column beneath them,
+ * which leaves them their room. env() and not the display-mode media query,
+ * which is false in Electron with titleBarOverlay. Set at the root, so it holds
+ * from the first paint, for the boot skeletons too;
+ * lib/window-controls-overlay.ts keeps it exact afterwards, and marks the rows.
+ */
+:root {
+  --titlebar-inset: 0px;
+  --app-top-inset: env(safe-area-inset-top, 0px);
+  --titlebar-right-inset: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  --titlebar-left-inset: env(titlebar-area-x, 0px);
+  --titlebar-row-height: env(titlebar-area-height, 0px);
+  /* Where a drawer from the window's edge starts (Mail's folders, the
+     Calendar, Contacts and Files sidebars): under the top bar. With the
+     window's controls over the page, see the [data-window-drawer] rules. */
+  --drawer-top: max(var(--app-top-inset), var(--titlebar-row-height));
+}
+
+/*
+ * A drawer from the window's edge with the window's controls over the page runs
+ * from the very top, over the rail's top, as in the browser, and its top band is
+ * one more place to drag the window by (its buttons stay buttons). Only where it
+ * would cover the controls does that change; lib/window-controls-overlay.ts reads
+ * that from the overlay's rect, for each edge. Under the buttons at the right
+ * (Windows, Linux, so a right-to-left page's drawer) it starts below their row.
+ * Under the traffic lights at the left (macOS) it still runs from the top, as a
+ * Finder or Mail sidebar does, and its content starts below them. The menu bar's
+ * row holds the controls when it shows: the drawer starts below that.
+ */
+html[data-window-controls]:not([data-menu-bar]) {
+  --drawer-top: var(--app-top-inset);
+  --drawer-band: var(--titlebar-row-height);
+}
+
+html[data-window-controls]:not([data-menu-bar]):not([dir="rtl"])[data-left-drawer="below"],
+html[data-window-controls]:not([data-menu-bar])[dir="rtl"][data-right-drawer="below"] {
+  --drawer-top: max(var(--app-top-inset), var(--titlebar-row-height));
+  --drawer-band: 0px;
+}
+
+html[data-window-controls]:not([data-menu-bar]):not([dir="rtl"])[data-left-drawer="inset"],
+html[data-window-controls]:not([data-menu-bar])[dir="rtl"][data-right-drawer="inset"] {
+  --drawer-inset: var(--titlebar-row-height);
+}
+
+html[data-window-controls] [data-window-drawer] {
+  padding-top: var(--drawer-inset, 0px);
+}
+
+html[data-window-controls] [data-window-drawer]::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: var(--drawer-band, 0px);
+  pointer-events: none;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+/* A skeleton's row that will hold the controls has them from the first frame. */
+html[data-window-controls] [data-window-row-right] {
+  padding-right: calc(var(--titlebar-right-inset) + 0.5rem) !important;
+}
+
+/*
+ * The composer's header runs over its plugin panels. The head above the panel at the
+ * window's right takes that room inside itself, so it stays as wide as the panel and
+ * its Hide button stays at the panel's edge, with its window buttons left of the controls.
+ */
+html[data-window-controls]:not([dir="rtl"]) [data-window-row-right] > [data-composer-panel-head="right"],
+html[data-window-controls][dir="rtl"] [data-window-row-right] > [data-composer-panel-head="left"] {
+  margin-right: calc(-1 * (var(--titlebar-right-inset) + 0.5rem));
+  padding-right: calc(var(--titlebar-right-inset) + 0.5rem);
+}
+
+/* Something floating at the top end of a page with no row: next to the controls, lined up. */
+html[data-window-controls]:not([dir="rtl"]) [data-window-beside-controls] {
+  right: calc(var(--titlebar-right-inset) + 0.5rem);
+  top: calc(var(--titlebar-row-height) / 2 - 1.25rem);
+}
+
+/* A column docked at the window's end starts below the controls, level with its neighbours' rows. */
+html[data-window-controls]:not([data-interface-layout="mountain-view"]) [data-window-end-column] {
+  padding-top: var(--titlebar-row-height);
+}
+
+/* A composer that is its own window closes with the window's button, one row over. */
+html[data-window-controls] [data-own-window-close] {
+  display: none;
+}
+
+/* Toasts that step out of the focus's way go to the top end corner: below the controls there. */
+html[data-window-controls] [data-toast-container][data-dodging] {
+  top: calc(var(--titlebar-row-height) + 0.75rem) !important;
+}
+
+/* A top row is at least as tall as the controls, so they don't hang over what's below it. */
+html[data-window-controls] [data-window-row] {
+  min-height: var(--titlebar-row-height);
+}
+
+/*
+ * Mountain View's bar is the top row there, and lines up with the controls by being as
+ * tall. An installed PWA's controls are shorter than what's in that bar.
+ */
+html[data-window-controls] [data-mv-topbar] {
+  height: max(var(--titlebar-row-height), 3.5rem);
+}
+
+/* Pro's tab strip is the top row there: as tall as the controls, its tabs along the bottom edge. */
+html[data-window-controls] [data-pane-strip] {
+  height: max(var(--titlebar-row-height), 2.25rem);
+  align-items: flex-end;
+}
+
+html[data-window-controls] [data-window-row-left] {
+  padding-left: calc(var(--titlebar-left-inset) + 0.5rem) !important;
+}
+
+/*
+ * The desktop app's menu bar while it takes its row (components/layout/window-menu-bar.tsx).
+ * The app moves down under it, a page that fills the window starts below it, and the
+ * window's controls sit in the bar's row, so no column below makes room for them.
+ */
+html[data-menu-bar] {
+  --menu-bar-height: 2rem;
+  --app-top-inset: calc(env(safe-area-inset-top, 0px) + var(--menu-bar-height));
+  --titlebar-inset: var(--menu-bar-height);
+}
+
+html[data-menu-bar][data-window-controls] [data-window-end-column] {
+  padding-top: 0;
+}
+
+/*
+ * The empty parts of the app's top rows are what the window is dragged by, and a
+ * double-click there maximises. Anything to click stays clickable, and so does
+ * whatever floats over a row: a region's drag wins over what's painted above it.
+ *
+ * Under the rows lies the band the controls have, invisible and first in the page, so
+ * a page with no row of its own (the login, an error) can still be moved. Everything
+ * later in the page cuts its own shape out of it.
+ */
+html[data-window-controls] body::before {
+  content: "";
+  position: fixed;
+  inset-inline: 0;
+  top: 0;
+  height: var(--titlebar-row-height);
+  pointer-events: none;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+html[data-window-controls] :is([data-window-row], [data-window-rail]) {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+/* A row that's only there to hold the controls: the settings page's name, for one. */
+[data-window-only] {
+  display: none !important;
+}
+
+html[data-window-controls]:not([data-interface-layout="mountain-view"]) [data-window-only] {
+  display: flex !important;
+}
+
+html[data-window-controls] :is(
+  a,
+  button,
+  input,
+  label,
+  select,
+  summary,
+  textarea,
+  [contenteditable="true"],
+  [role="button"],
+  iframe,
+  [role="checkbox"],
+  [role="combobox"],
+  [role="link"],
+  [role="menu"],
+  [role="menuitem"],
+  [role="option"],
+  [role="searchbox"],
+  [role="switch"],
+  [role="tab"],
+  [role="treeitem"],
+  [tabindex]:not([tabindex="-1"]),
+  [draggable="true"]
+) {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+html[data-window-controls] :is(.fixed, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="tooltip"]) {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* A dialog's own top row, when it fills the window, is a row like any other. */
+html[data-window-controls] :is(.fixed, [role="dialog"]) [data-window-row] {
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+/*
+ * A screen that fills the window and has no row of its own (the app lock, the
+ * page for a crash) draws the controls' band itself, first inside it: being
+ * fixed, it cuts body::before out. What's clickable comes later and cuts itself
+ * out of this one. No [data-window-controls] needed: the crash page has no JS
+ * to set it, and without an overlay the height is 0. While the desktop menu bar
+ * is there, that is the row the controls sit in, and it drags.
+ */
+[data-window-drag-band] {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: var(--titlebar-row-height);
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+/*
+ * The region is inherited: what comes after the band, inside a fixed screen, would
+ * take the screen's no-drag and cover the band with it. It takes the initial value,
+ * none, instead (Chromium doesn't parse the keyword) and leaves the band alone;
+ * what's clickable in it still says no-drag for itself.
+ */
+[data-window-drag-band] ~ * {
+  app-region: initial;
+  -webkit-app-region: initial;
+}
+
+html:has([data-window-menu-bar]) [data-window-drag-band] {
+  display: none;
+}
+
+/* macOS: the traffic lights sit at the top of the rail, with room there only. */
+html[data-window-controls-left] [data-window-rail] {
+  padding-top: var(--titlebar-row-height);
+}
+
+/* Safe area insets for notched devices (iPhone X+, etc.) */
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-area-inset-left {
+  padding-left: env(safe-area-inset-left);
+}
+
+.safe-area-inset-right {
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Minimum touch targets (44x44px recommended by Apple HIG) */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Prevent text selection on mobile for UI elements */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Smooth transitions for view switching */
+.view-transition {
+  transition:
+    transform 0.3s ease-in-out,
+    opacity 0.3s ease-in-out;
+}
+
+/* Hide scrollbar on mobile while keeping functionality */
+@media (max-width: 767px) {
+  .mobile-scroll-hidden::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-scroll-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+.scroll-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+.scroll-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Mobile backdrop blur support */
+@supports (backdrop-filter: blur(8px)) {
+  .mobile-backdrop {
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+}
+
+/* Prevent overscroll bounce on iOS */
+.no-overscroll {
+  overscroll-behavior: none;
+}
+
+/* iOS Safari zooms the viewport whenever a focused field computes below 16px,
+ * and leaves the page zoomed and panned once the keyboard closes (#838). Every
+ * field here is text-sm (0.875rem), so no --font-size-base setting escapes it:
+ * small 12.25px, medium 14px, large 15.75px. The viewport meta deliberately
+ * omits maximum-scale so pinch zoom keeps working, which leaves CSS as the
+ * only place to put the floor.
+ *
+ * max() raises the small fields to 16px while letting the "Large" setting go
+ * past it (18px) rather than pinning every field to the threshold, and
+ * pointer: coarse keeps desktop typography untouched. Checkbox and radio are
+ * excluded because their box is font-relative in Safari; the :not() chain also
+ * lifts specificity above .text-sm, so no !important is needed.
+ *
+ * Quoted replies are exempt by construction: they render inside a shadow root
+ * (components/email/quoted-html.ts) so they match the sent mail 1:1, and page
+ * CSS cannot reach in. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select,
+  [contenteditable="true"] {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* Shake animation (for rejected input) */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+.animate-shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+/* Fade in animation (for popovers) */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+/* Slide in from right animation (for mobile views) */
+@keyframes slide-in-from-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-from-right {
+  animation: slide-in-from-right 0.3s ease-out;
+}
+
+/* Slide in from left animation (for sidebar) */
+@keyframes slide-in-from-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-from-left {
+  animation: slide-in-from-left 0.3s ease-out;
+}
+
+/* Calendar swipe animations (subtler slide for view transitions) */
+@keyframes cal-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(30%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes cal-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-30%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-right {
+  animation: cal-slide-in-right 0.25s ease-out;
+}
+
+.animate-slide-in-left {
+  animation: cal-slide-in-left 0.25s ease-out;
+}
+
+/* Reduced motion: respect the OS preference unless the user turned Reduce
+   motion off in Settings > Accessibility. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) *,
+  :root:not([data-motion="full"]) *::before,
+  :root:not([data-motion="full"]) *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    /* Every element transitions `all` by default once it has a duration.
+       Visibility is left out: a transition from hidden would keep a newly
+       shown menu or dialog hidden for a frame, and focus() would miss it.
+       So is the position: Chrome paints a transition's first frame at its
+       start value, and a menu placed from script flashed where it was
+       measured (a submenu in the window's top-left corner). */
+    transition-property: all, visibility, top, right, bottom, left !important;
+    transition-duration: 0.01ms, 0s, 0s, 0s, 0s, 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* The same when the user turns Reduce motion on in the settings (#1215). */
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-property: all, visibility, top, right, bottom, left !important;
+  transition-duration: 0.01ms, 0s, 0s, 0s, 0s, 0s !important;
+  scroll-behavior: auto !important;
+}
+
+/* Disable backdrop-filter on mobile for performance */
+@media (max-width: 767px) {
+  .mobile-backdrop {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* TipTap Rich Text Editor */
+.tiptap {
+  outline: none;
+}
+
+/* View-only quote decorations must survive a node view refreshing its inline styles. */
+.tiptap [data-reply-quote-collapsed] {
+  display: none !important;
+}
+
+.tiptap p {
+  margin: 0.25rem 0;
+}
+
+.tiptap h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0.5rem 0;
+}
+
+.tiptap h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
+
+.tiptap ul {
+  list-style-type: disc;
+  padding-inline-start: 1.5rem;
+  margin: 0.25rem 0;
+}
+
+.tiptap ol {
+  list-style-type: decimal;
+  padding-inline-start: 1.5rem;
+  margin: 0.25rem 0;
+}
+
+.tiptap li {
+  margin: 0.125rem 0;
+}
+
+.tiptap blockquote {
+  border-inline-start: 3px solid var(--color-border);
+  padding-inline-start: 1rem;
+  margin: 0.5rem 0;
+  color: var(--color-muted-foreground);
+}
+
+.tiptap pre {
+  background-color: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  font-family: monospace;
+  font-size: 0.875rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.tiptap code {
+  background-color: var(--color-muted);
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-family: monospace;
+  font-size: 0.875rem;
+}
+
+.tiptap a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* @mention chip (mention-chip.tsx). In the sent mail it is a plain mailto link. */
+.tiptap a.mention {
+  display: inline-block;
+  padding: 0 0.3em;
+  border-radius: 0.375rem;
+  background-color: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-primary);
+  font-weight: 500;
+  line-height: 1.35;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms, box-shadow 120ms;
+}
+
+/* Hover says it opens something on click; the card itself waits for the click. */
+.tiptap a.mention:hover {
+  background-color: color-mix(in srgb, var(--color-primary) 24%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent);
+}
+
+.tiptap a.mention.mention-outside:hover {
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.tiptap a.mention.ProseMirror-selectednode {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* Named in the text but not in To or Cc. */
+.tiptap a.mention.mention-outside {
+  background-color: transparent;
+  color: var(--color-muted-foreground);
+  box-shadow: inset 0 0 0 1px currentColor;
+  border: 0;
+}
+
+.tiptap img {
+  max-width: 100%;
+  height: auto;
+}
+
+/*
+ * Proofreading underlines (components/email/proofreading). The kind shows in
+ * the line's style as well as its colour, so it survives forced colours and
+ * colour blindness: spelling wavy, grammar double, style dotted, other dashed.
+ */
+:root {
+  --text-issue-spelling: var(--color-destructive);
+  --text-issue-grammar: #2563eb;
+  --text-issue-style: #b45309;
+  --text-issue-other: #6b7280;
+}
+.dark {
+  --text-issue-grammar: #60a5fa;
+  --text-issue-style: #fbbf24;
+  --text-issue-other: #9ca3af;
+}
+.tiptap .text-issue {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  text-decoration-skip-ink: none;
+}
+.tiptap .text-issue-spelling {
+  text-decoration-style: wavy;
+  text-decoration-color: var(--text-issue-spelling);
+}
+.tiptap .text-issue-grammar {
+  text-decoration-style: double;
+  text-decoration-color: var(--text-issue-grammar);
+}
+.tiptap .text-issue-style {
+  text-decoration-style: dotted;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--text-issue-style);
+}
+.tiptap .text-issue-other {
+  text-decoration-style: dashed;
+  text-decoration-color: var(--text-issue-other);
+}
+.tiptap .text-issue-active {
+  background-color: color-mix(in srgb, var(--color-primary) 18%, transparent);
+  outline: 1px solid var(--color-primary);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.tiptap hr {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 1rem 0;
+}
+
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: inline-start;
+  color: var(--color-muted-foreground);
+  pointer-events: none;
+  height: 0;
+}
+
+.tiptap .ProseMirror-selectednode img {
+  outline: none;
+}
+
+.tiptap table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  table-layout: fixed;
+  width: 100%;
+  overflow: hidden;
+}
+
+.tiptap table td,
+.tiptap table th {
+  border: 1px solid var(--color-border);
+  padding: 0.375rem 0.5rem;
+  vertical-align: top;
+  position: relative;
+  min-width: 1em;
+}
+
+.tiptap table th {
+  background-color: var(--color-muted) !important;
+  color: var(--color-foreground) !important;
+  font-weight: 600;
+  text-align: left;
+}
+
+.tiptap table p {
+  margin: 0;
+}
+
+.tiptap table .selectedCell::after {
+  background: rgba(99, 102, 241, 0.15);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.tiptap table .column-resize-handle {
+  background-color: var(--color-primary);
+  bottom: -2px;
+  pointer-events: none;
+  position: absolute;
+  right: -2px;
+  top: 0;
+  width: 4px;
+}
+
+.tiptap.resize-cursor {
+  cursor: col-resize;
+}
+
+/* Smooth halo applied to a setting row when the user clicks a sub-result in
+   the settings search. It is drawn by a pseudo-element behind the row's
+   content, so the row keeps its own shape and divider. It stays inside the
+   row's padding box vertically (never over the dividers above and below) and
+   reaches 10px past it sideways so the text isn't flush with its edge. Uses
+   the primary theme color so it adapts to light/dark. */
+@keyframes settings-search-pulse {
+  0% {
+    background-color: color-mix(in srgb, var(--color-primary) 0%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+  30% {
+    background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
+  }
+  100% {
+    background-color: color-mix(in srgb, var(--color-primary) 0%, transparent);
+    border-color: color-mix(in srgb, var(--color-primary) 0%, transparent);
+  }
+}
+
+.settings-search-highlight {
+  position: relative;
+  isolation: isolate;
+}
+
+.settings-search-highlight::before {
+  content: "";
+  position: absolute;
+  inset: 0 -10px;
+  z-index: -1;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  pointer-events: none;
+  animation: settings-search-pulse 1.6s ease-in-out forwards;
+}
+
+/* RTL: mirror directional icons (chevrons/arrows) so prev/next, back/forward,
+   reply/forward and panel-collapse affordances point the correct way in
+   right-to-left layouts.
+   Tabler emits a `tabler-icon-<name>` class per icon, so we target the
+   directional ones only — vertical chevrons (up/down) are intentionally left. */
+[dir="rtl"] .tabler-icon-chevron-left,
+[dir="rtl"] .tabler-icon-chevron-right,
+[dir="rtl"] .tabler-icon-chevrons-left,
+[dir="rtl"] .tabler-icon-chevrons-right,
+[dir="rtl"] .tabler-icon-arrow-left,
+[dir="rtl"] .tabler-icon-arrow-right,
+[dir="rtl"] .tabler-icon-arrow-big-left,
+[dir="rtl"] .tabler-icon-arrow-big-right,
+[dir="rtl"] .tabler-icon-arrow-back-up,
+[dir="rtl"] .tabler-icon-arrow-back-up-double,
+[dir="rtl"] .tabler-icon-arrow-forward-up,
+[dir="rtl"] .tabler-icon-arrow-forward-up-double,
+[dir="rtl"] .tabler-icon-layout-sidebar-left,
+[dir="rtl"] .tabler-icon-layout-sidebar-right {
+  transform: scaleX(-1);
+}
+
+/* ==========================================================================
+   Interface layouts
+   --------------------------------------------------------------------------
+   `data-interface-layout` is set on <html> by the settings store
+   (`applyInterfaceLayout`). The default layout declares no overrides, so
+   everything below is additive and switched off by a single attribute.
+   Mountain View sets its own geometry - bar heights, rail widths, pill shapes,
+   row rhythm - while colour, iconography and type keep coming from the active
+   theme.
+   ========================================================================== */
+
+[data-interface-layout="mountain-view"] {
+  --mv-topbar-h: 64px;
+  --mv-rail-w: 72px;
+  --mv-rail-peek-w: 256px;
+  --mv-nav-row-h: 32px;
+  --mv-nav-radius: 9999px;
+  --mv-compose-h: 56px;
+  --mv-search-h: 48px;
+  --mv-search-radius: 8px;
+  --mv-popover-w: 352px;
+  --mv-popover-radius: 28px;
+  --mv-card-radius: 16px;
+  /* Surfaces, tinted from the theme's primary so any theme keeps the same
+     relationships: a faintly tinted canvas behind the chrome, a plain card
+     for the content, a slightly deeper search field, a selected-row pill and
+     a soft Compose button. */
+  --mv-canvas: color-mix(in oklab, var(--color-primary) 4%, var(--color-background));
+  --mv-search-bg: color-mix(in oklab, var(--color-primary) 9%, var(--color-background));
+  --mv-nav-hover: color-mix(in oklab, var(--color-foreground) 7%, var(--mv-canvas));
+  --mv-nav-selected: color-mix(in oklab, var(--color-primary) 18%, var(--color-background));
+  --mv-compose-bg: color-mix(in oklab, var(--color-primary) 24%, var(--color-background));
+  --mv-compose-fg: color-mix(in oklab, var(--color-primary) 30%, var(--color-foreground));
+  --mv-row-read: color-mix(in oklab, var(--color-primary) 3%, var(--color-background));
+}
+
+/* The content card: everything that is not chrome sits on one rounded sheet
+   inset from the canvas. */
+[data-interface-layout="mountain-view"] [data-mv-card] {
+  border-radius: var(--mv-card-radius);
+  background-color: var(--color-background);
+  overflow: hidden;
+}
+
+/* Search: a filled 48px field that lifts onto a card while focused, rather
+   than the outlined input the default layout uses. */
+[data-interface-layout="mountain-view"] .mv-topbar input[data-search-input] {
+  height: var(--mv-search-h);
+  border-radius: var(--mv-search-radius);
+  border-color: transparent;
+  background-color: var(--mv-search-bg);
+  padding-inline-start: 3rem;
+  font-size: 1rem;
+}
+
+[data-interface-layout="mountain-view"] .mv-topbar input[data-search-input]:hover {
+  border-color: transparent;
+  background-color: var(--mv-search-bg);
+  box-shadow: 0 1px 1px 0 rgb(0 0 0 / 0.08), 0 1px 3px 1px rgb(0 0 0 / 0.04);
+}
+
+[data-interface-layout="mountain-view"] .mv-topbar input[data-search-input]:focus-visible {
+  background-color: var(--color-background);
+  border-color: transparent;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.16), 0 4px 8px 3px rgb(0 0 0 / 0.08);
+}
+
+/* The filter button sits inside the field's trailing end: keep typed text and
+   the clear button clear of it. */
+[data-interface-layout="mountain-view"] .mv-topbar input[data-search-input] {
+  padding-inline-end: 5.5rem;
+}
+
+[data-interface-layout="mountain-view"] .mv-topbar-search > div > form > div > div {
+  inset-inline-end: 3.25rem;
+}
+
+/* Large text in a narrow window leaves the field little width, less than these
+   paddings add up to: the input then stuck out under the bell, with the filter
+   button on top of the magnifier. Here the text gets what the magnifier had. */
+[data-interface-layout="mountain-view"] .mv-topbar-search {
+  container-type: inline-size;
+}
+@container (max-width: 16rem) {
+  [data-interface-layout="mountain-view"] .mv-topbar input[data-search-input] {
+    padding-inline-start: 0.75rem;
+    padding-inline-end: 2.75rem;
+  }
+  [data-interface-layout="mountain-view"] .mv-topbar-search > div > form > div > svg {
+    display: none;
+  }
+  /* Typed text stops at the clear button, and the / key cap makes way for the
+     placeholder. */
+  [data-interface-layout="mountain-view"] .mv-topbar input[data-search-input]:not(:placeholder-shown) {
+    padding-inline-end: 5rem;
+  }
+  [data-interface-layout="mountain-view"] .mv-topbar-search > div > form > div > div kbd {
+    display: none;
+  }
+}
+/* No room left for both: the text goes first. */
+@container (max-width: 9rem) {
+  [data-interface-layout="mountain-view"] .mv-topbar input[data-search-input]:not(:placeholder-shown) {
+    padding-inline-end: 2.75rem;
+  }
+  [data-interface-layout="mountain-view"] .mv-topbar-search > div > form > div > div {
+    display: none;
+  }
+}
+
+/* The magnifier sits on the field's baseline grid, one 48px hit area in. */
+[data-interface-layout="mountain-view"] .mv-topbar-search > div > form > div > svg {
+  inset-inline-start: 1rem;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* Folder rows: 32px pills flush with the rail's leading edge and rounded only
+   on the trailing side, so the selected label reads as one continuous shape
+   with the rail. The default layout's leading accent stripe goes away with it. */
+[data-interface-layout="mountain-view"] [data-mv-nav-row] {
+  min-height: var(--mv-nav-row-h);
+  margin-inline-end: 12px;
+  padding-inline-end: 16px;
+  border-inline-start-width: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: var(--mv-nav-radius);
+  border-end-end-radius: var(--mv-nav-radius);
+}
+
+/* Selected and hovered rows fill the pill; a folder with unread mail reads
+   bold, the way the message rows do. Bold means unread only: the pill alone
+   marks the open folder, so a selected folder without unread mail stays
+   regular (#1469). Icons are 20px with an 18px gap. */
+[data-interface-layout="mountain-view"] [data-mv-nav-row] {
+  font-size: 0.875rem;
+  color: var(--color-foreground);
+}
+[data-interface-layout="mountain-view"] [data-mv-nav-row]:hover {
+  background-color: var(--mv-nav-hover);
+}
+[data-interface-layout="mountain-view"] [data-mv-nav-row][data-selected="true"] {
+  background-color: var(--mv-nav-selected);
+  color: var(--color-foreground);
+  font-weight: 400;
+}
+[data-interface-layout="mountain-view"] [data-mv-nav-row][data-has-unread] {
+  font-weight: 700;
+}
+[data-interface-layout="mountain-view"] [data-mv-nav-row] > button {
+  gap: 18px;
+}
+[data-interface-layout="mountain-view"] [data-mv-nav-row] > button > span:first-child,
+[data-interface-layout="mountain-view"] [data-mv-nav-row] > button > span:first-child > svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Compose: a 56px button with a 16px corner, which shrinks to a square with
+   the rail. */
+[data-interface-layout="mountain-view"] [data-mv-compose] {
+  height: var(--mv-compose-h);
+  border-radius: 16px;
+  font-weight: 500;
+}
+
+/* Message rows: read mail sits on a faint tint and unread on the plain card,
+   a ticked row takes the selection colour, and the row under the pointer
+   lifts on a shadow instead of changing colour. */
+[data-interface-layout="mountain-view"] [data-mv-row] {
+  background-color: var(--mv-row-read);
+  box-shadow: none;
+}
+[data-interface-layout="mountain-view"] [data-mv-row][data-unread="true"] {
+  background-color: var(--color-background);
+}
+[data-interface-layout="mountain-view"] [data-mv-row][data-checked] {
+  background-color: var(--mv-nav-selected);
+}
+[data-interface-layout="mountain-view"] [data-mv-row][aria-current="true"] {
+  background-color: var(--color-accent);
+}
+[data-interface-layout="mountain-view"] [data-mv-row]:hover {
+  z-index: 1;
+  box-shadow:
+    inset 1px 0 0 var(--color-border),
+    inset -1px 0 0 var(--color-border),
+    0 1px 2px 0 rgb(60 64 67 / 0.3),
+    0 1px 3px 1px rgb(60 64 67 / 0.15);
+}
+
+/* The open message's toolbar: round 40px icon buttons in the muted colour,
+   20px icons. Menus that drop from it keep their own rows. */
+[data-interface-layout="mountain-view"] [data-mv-viewer-toolbar] button:not([role="menu"] *):not([data-mv-pager] *) {
+  height: 40px;
+  min-width: 40px;
+  padding-inline: 10px;
+  border-radius: 9999px;
+  color: var(--color-muted-foreground);
+}
+[data-interface-layout="mountain-view"] [data-mv-viewer-toolbar] button:not([role="menu"] *):not([data-mv-pager] *):hover {
+  color: var(--color-foreground);
+}
+[data-interface-layout="mountain-view"] [data-mv-viewer-toolbar] button:not([role="menu"] *) > svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* The compose window's bottom bar: its two halves fold into one row, Send
+   leads as a round split button without its icon, the tools follow as bare
+   icons, and the bin for Discard sits at the far end. */
+[data-mv-compose-footer] > * {
+  display: contents;
+}
+[data-mv-compose-footer] > * > * {
+  order: 1;
+}
+[data-mv-compose-footer] [data-mv-send] {
+  order: 0;
+  margin-inline-end: 0.5rem;
+}
+[data-mv-compose-footer] [data-mv-discard] {
+  order: 2;
+  margin-inline-start: auto;
+}
+[data-mv-compose-footer] [data-mv-send] .tabler-icon-send {
+  display: none;
+}
+[data-mv-compose-footer] button[data-mv-send],
+[data-mv-compose-footer] [data-mv-send] > button:first-child {
+  height: 36px;
+  padding-inline: 1.25rem 1rem;
+  border-radius: 18px;
+}
+[data-mv-compose-footer] [data-mv-send] > button:first-child:not(:only-child) {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+[data-mv-compose-footer] [data-mv-send] > button:nth-child(2) {
+  height: 36px;
+  border-radius: 0 18px 18px 0;
+}
+[dir="rtl"] [data-mv-compose-footer] [data-mv-send] > button:nth-child(2) {
+  border-radius: 18px 0 0 18px;
+}
+[data-mv-compose-footer] button:not([data-mv-send] *):not([data-mv-send]) > span.text-sm,
+[data-mv-compose-footer] button[data-testid$="-menu"] > .tabler-icon-chevron-down {
+  display: none;
+}
+[data-mv-compose-footer] button[data-testid$="-menu"] {
+  position: relative;
+  width: 36px;
+  padding-inline: 0;
+  justify-content: center;
+  border-radius: 9999px;
+}
+[data-mv-compose-footer] button[data-testid$="-menu"] > span:not(.text-sm) {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+}
+
+/* The account popover: a wide card with a very round corner, rather
+   than the narrow menu the rail and the sidebar switchers drop. */
+[data-interface-layout="mountain-view"] [data-mv-account-popover] {
+  width: min(var(--mv-popover-w), calc(100vw - 2rem));
+  border-radius: var(--mv-popover-radius);
+}
+
+/* The compose window docks beside the side panel, not over it: over it, the
+   window hides the panel's Close button and the rail's own buttons. The rail is
+   3.5rem wide, which grows with the text size, an open panel a fixed 300px plus
+   8px of margin, which doesn't. */
+[data-interface-layout="mountain-view"]:has([data-mv-side-rail]) {
+  --mv-compose-end: 4.5rem;
+}
+[data-interface-layout="mountain-view"]:has([data-mv-side-panel], [data-plugin-side-panel]) {
+  --mv-compose-end: calc(3.5rem + 308px + 1rem);
+}
+
+/* The advanced filters drop from the search field with a small gap and take
+   its corner, so the two read as one control. Position and width come from
+   the field's own box, measured by FilterPanelHost. */
+[data-interface-layout="mountain-view"] [data-mv-filter-panel] {
+  border-radius: var(--mv-search-radius);
+}
+
+/* The collapsed rail's hover peek. Only on desktop: below that breakpoint the
+   sidebar is already a drawer, opened by a tap rather than by a pointer that
+   does not exist. The width beats Tailwind's own `desk:w-full` on specificity,
+   which is what keeps the floating panel from filling the 72px column. */
+@media (width >= 37.5rem) {
+  [data-interface-layout="mountain-view"] [data-mv-rail-peek] {
+    width: var(--mv-rail-peek-w);
+  }
+}
+
+/* The folded folder column's drawer (components/layout/sidebar.tsx) is at its
+   full width from the first frame, Reduce motion included, whose rule makes
+   everything transition for 0.01ms. Grown from the column's 48px at the
+   window's edge, it left the pointer that opened it outside for a frame, and
+   the leave closed it again. Specificity (0,3,0) beats that rule's (0,2,0). */
+:root [data-folder-drawer][data-folder-drawer] {
+  transition: none !important;
+}
+
+/* A list row while its right-click menu is open (components/ui/context-menu.tsx). */
+[data-menu-row][data-menu-opener] {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+
+/* Right to left, a row's hover actions sit at its left end, where an English
+   subject starts: its text keeps clear of them while they show, by the strip's
+   width (set by components/email/email-hover-actions.tsx) and the room the
+   strip keeps off the edge, instead of lying under them (mail-p3-10). */
+html[dir="rtl"] [data-menu-row][data-hover-actions-shown] > [data-row-text] {
+  padding-inline-end: calc(var(--row-actions-w, 0px) + var(--focus-ring-width, 2px));
+}
+
+/* A menu opened under the pointer: the item there isn't hovered until the pointer moves. */
+[data-pointer-unarmed] :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]):hover {
+  background-color: transparent;
+}

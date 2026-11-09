@@ -1,0 +1,1374 @@
+"use client";
+
+import { AppMain, SkipLink } from "@/components/layout/app-landmarks";
+import { LEGACY_TAB_MAP, MOVED_SECTIONS } from "@/lib/settings-tabs";
+import { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from 'react';
+import { useRouter } from '@/i18n/navigation';
+import { useTranslations, useMessages } from 'next-intl';
+import {
+  ArrowLeft,
+  ChevronRight,
+  LogOut,
+  Settings as SettingsIcon,
+  Puzzle,
+  type AppIcon,
+} from '@/components/icons';
+import { SETTINGS_TAB_ICONS, type SettingsTabGroup } from '@/components/settings/settings-tab-icons';
+import { SettingsSkeleton, SettingsSkeletonBody } from '@/components/boot-skeleton/settings-skeleton';
+import { useSkeletonLabels } from '@/components/boot-skeleton/use-skeleton-labels';
+import { writeSettingsHints } from '@/lib/boot-skeleton/hints';
+import { useRegisterCommands } from '@/lib/command-registry';
+import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
+import { ToolbarSearch } from '@/components/ui/toolbar';
+import { AppearanceSettings } from '@/components/settings/appearance-settings';
+import { AccessibilitySettings } from '@/components/settings/accessibility-settings';
+import { AppTopBannerSlot } from '@/components/plugins/app-top-banner-slot';
+import { GeneralSettings } from '@/components/settings/general-settings';
+import { ReadingSettings } from '@/components/settings/reading-settings';
+import { MessageListSettings } from '@/components/settings/message-list-settings';
+import { ComposingSettings } from '@/components/settings/composing-settings';
+import { AccountSettings } from '@/components/settings/account-settings';
+import { VacationSettings } from '@/components/settings/vacation-settings';
+import { CalendarSettings } from '@/components/settings/calendar-settings';
+import { CalendarManagementSettings } from '@/components/settings/calendar-management-settings';
+import { AddressBookManagementSettings } from '@/components/settings/address-book-management-settings';
+import { FilterSettings } from '@/components/settings/filter-settings';
+import { AboutDataSettings, AboutSettings, TroubleshootingSettings } from '@/components/settings/about-data-settings';
+import { DesktopAppSettings } from '@/components/settings/desktop-app-settings';
+import { PrivacySettings } from '@/components/settings/privacy-settings';
+import { OfflineSettings } from '@/components/offline/offline-settings';
+import { IS_LITE } from '@/lib/lite';
+import { HelpLinks } from '@/components/layout/help-links';
+import { OrganizeSettings } from '@/components/settings/organize-settings';
+import { AccountSecuritySettings } from '@/components/settings/account-security-settings';
+import { FilesSettingsComponent } from '@/components/settings/files-settings';
+import { DesktopFilesSettings } from '@/components/settings/desktop-files-settings';
+import { useFilesSyncStore } from '@/stores/files-sync-store';
+import { ContactsSettings } from '@/components/settings/contacts-settings';
+import { AddonsSettings } from '@/components/settings/addons-settings';
+import { NotificationSettings } from '@/components/settings/notification-settings';
+import { DelegatesSettings } from '@/components/settings/delegates/delegates-settings';
+import { RecoverDeletedSettings } from '@/components/settings/recover-deleted-settings';
+import { useDeletedItemsRecovery } from '@/hooks/use-deleted-items-recovery';
+import { RECOVERY_SETTINGS_TAB } from '@/lib/recovery/archived-items';
+import { useRestriction } from '@/hooks/use-restriction';
+import { PluginIframeSlot } from '@/components/plugins/plugin-iframe-slot';
+import { offersForSlot as pluginOffersForSlot, subscribe as pluginRegistrySubscribe, get as getActivePlugin } from '@/lib/plugin-sandbox/registry';
+import { AdvancedSettingsProvider, AdvancedSettingsSwitch, SectionNav, scrollToSettingsSection } from '@/components/settings/settings-section';
+import { appPath, buildSettingsPath, parseSettingsPath, parseSettingsSection } from '@/lib/deep-links';
+import { consumePendingDeepLink, subscribePendingDeepLink } from '@/lib/deep-link-handoff';
+import { useDeepLinkUrl } from '@/hooks/use-deep-link-url';
+import { useProInterfaceActive } from '@/components/pro/pro-interface-redirect';
+import { useAuthStore, redirectToLogin, saveRedirectAfterLogin } from '@/stores/auth-store';
+import { useEmailStore } from '@/stores/email-store';
+import { usePluginStore } from '@/stores/plugin-store';
+import { useThemeStore } from '@/stores/theme-store';
+import { useSettingsStore } from '@/stores/settings-store';
+import { useManagedAccountStore } from '@/stores/managed-account-store';
+import { useIsDesktop } from '@/hooks/use-media-query';
+import { NavigationRail } from '@/components/layout/navigation-rail';
+import { PhoneHeaderActions } from '@/components/layout/phone-header-actions';
+import { useAppSidePanel } from '@/components/plugins/app-side-panel';
+import { SidebarAppsModal } from '@/components/layout/sidebar-apps-modal';
+import { InlineAppView } from '@/components/layout/inline-app-view';
+import { useSidebarApps } from '@/hooks/use-sidebar-apps';
+import { useResolvedSidebarApps } from '@/hooks/use-resolved-sidebar-apps';
+import { useIsEmbedded } from '@/hooks/use-is-embedded';
+import { useIsFocusedProTab } from '@/hooks/use-pane-context';
+import { ResizeHandle } from '@/components/layout/resize-handle';
+import { useConfig } from '@/hooks/use-config';
+import { productName } from '@/lib/product-name';
+import { usePolicyStore } from '@/stores/policy-store';
+import { cn } from '@/lib/utils';
+import {
+  type SettingsSearchEntry,
+  type SettingsSearchTab,
+  type SubResult,
+  getByPath,
+  matchesAllWords,
+  matchesSubResult,
+  settingsSubResults,
+  settingsTabLabelKey,
+  subResultText,
+  tabKeywords,
+  tabSearchEntries,
+  ADVANCED_ONLY_TABS,
+  ARCHIVE_ACTION_SEARCH_PATHS,
+} from '@/lib/settings-search';
+import { getDesktopBridge } from '@/lib/desktop/bridge';
+import { useDesktopCommands } from '@/lib/desktop/commands';
+import { menuBarAvailable } from '@/lib/desktop/menu-bar';
+import { useAccountStore } from '@/stores/account-store';
+import { useMediaQuery, atLeast, PHONE_BELOW } from '@/hooks/use-media-query';
+import { useLiteLinkSegments } from '@/hooks/use-lite-link-segments';
+import { useDocumentTitle } from '@/hooks/use-document-title';
+import { useDesktopWindowName } from '@/lib/desktop/window-name';
+import { MvTopBar } from "@/components/layout/mv-top-bar";
+import { useMountainViewShell } from "@/hooks/use-mountain-view-shell";
+import { scrollBehavior } from '@/lib/reduced-motion';
+
+type Tab = SettingsSearchTab;
+
+// `top` and `bottom` have no heading: the first pages, and Backup & reset and
+// About after a rule at the end.
+type TabGroup = SettingsTabGroup;
+
+// A plugin that exposes a `settings-section` slot gets its own first-class
+// Settings entry, keyed `plugin:<id>`, so its UI (e.g. S/MIME key import) is
+// discoverable as a menu point rather than buried inside another panel.
+type PluginTabId = `plugin:${string}`;
+// A plugin that offers a `settings-page` slot gets a page of its own under the
+// "Plugins" group, keyed `plugin-page:<id>`, drawn at the full content width.
+type PluginPageTabId = `plugin-page:${string}`;
+type SettingsTabId = Tab | PluginTabId | PluginPageTabId;
+const PLUGIN_PAGE_PREFIX = 'plugin-page:';
+
+interface TabDef {
+  id: SettingsTabId;
+  label: string;
+  icon: AppIcon;
+  group: TabGroup;
+  /** Indented under the entry before it (plugin pages under Add-ons). */
+  sub?: boolean;
+}
+
+// Shared with the boot skeleton, which draws the same nav before any script runs.
+const tabIcons = SETTINGS_TAB_ICONS;
+
+const tabGroupOrder: TabGroup[] = ['top', 'mail', 'apps', 'bottom'];
+
+// Legacy tab ids and their current pages live in lib/settings-tabs.ts, which
+// the pre-paint boot script reads too.
+export { LEGACY_TAB_MAP };
+
+// Where on the new page a legacy tab's settings now sit, so an old link
+// lands on that section rather than at the top of the page.
+const LEGACY_SECTION_MAP: Record<string, string> = {
+  layout: 'layout',
+  themes: 'theme',
+  content_senders: 'images',
+  identities: 'addresses',
+  language: 'language',
+  protocol_handlers: 'links',
+  templates: 'templates',
+  folders: 'folders',
+  keywords: 'tags',
+  downloads: 'downloads',
+  sidebar_apps: 'sidebar-apps',
+  plugins: 'plugins',
+  about_data: 'backup',
+  debug: 'debug',
+};
+
+/** A tab and, optionally, the section of it a link or event names. */
+interface SettingsTarget {
+  tab: SettingsTabId;
+  section: string | null;
+}
+
+/**
+ * Migrates a legacy tab id to the page and section that hold it now, and a
+ * section that moved to another page (MOVED_SECTIONS in lib/settings-tabs.ts)
+ * to that page. An explicit section wins over the legacy one.
+ */
+function migrateTarget(raw: string, section: string | null = null): { tab: string; section: string | null } {
+  const tab = raw in LEGACY_TAB_MAP ? LEGACY_TAB_MAP[raw] : raw;
+  const target = section ?? (raw in LEGACY_SECTION_MAP ? LEGACY_SECTION_MAP[raw] : null);
+  const moved = target ? MOVED_SECTIONS[`${tab}/${target}`] : undefined;
+  return moved ? { tab: moved.tab, section: moved.section } : { tab, section: target };
+}
+
+/** Whether the desktop app's bridge is here; false on the server and in the first render. */
+const subscribeNever = () => () => {};
+function useInDesktopApp(): boolean {
+  return useSyncExternalStore(subscribeNever, () => !!getDesktopBridge(), () => false);
+}
+
+function hasOneShotDeepLink(): boolean {
+  try { return !!sessionStorage.getItem('settings-deep-link-tab'); } catch { return false; }
+}
+
+function readPersistedTab(): SettingsTabId {
+  try {
+    // One-shot deep link from the sidebar section gears (Folders / Tags).
+    // Used only as the initial tab and intentionally NOT written to
+    // 'settings-active-tab', so a gear click never becomes the persisted
+    // default that the regular Settings button lands on. Cleared on mount.
+    const deepLink = sessionStorage.getItem('settings-deep-link-tab');
+    if (deepLink) {
+      return (deepLink in LEGACY_TAB_MAP ? LEGACY_TAB_MAP[deepLink] : deepLink) as SettingsTabId;
+    }
+    const saved = localStorage.getItem('settings-active-tab');
+    if (!saved) return 'appearance';
+    if (saved in LEGACY_TAB_MAP) {
+      const migrated = LEGACY_TAB_MAP[saved];
+      try { localStorage.setItem('settings-active-tab', migrated); } catch { /* ignore */ }
+      return migrated;
+    }
+    return saved as SettingsTabId;
+  } catch {
+    return 'appearance';
+  }
+}
+
+/**
+ * The tab a `/settings/<tab>` deep link names (#733), or null when the URL
+ * names nothing we recognise - an old link to a tab that has since been
+ * renamed falls back to the persisted tab rather than rendering an empty pane.
+ * Legacy ids are migrated the same way the stored value is.
+ */
+function targetFromDeepLink(segments: string[] | null | undefined): SettingsTarget | null {
+  const raw = parseSettingsPath(segments ?? []);
+  if (!raw) return null;
+  const { tab, section } = migrateTarget(raw, parseSettingsSection(segments ?? []));
+  if (tab in tabIcons || tab.startsWith('plugin:') || tab.startsWith(PLUGIN_PAGE_PREFIX)) {
+    return { tab: tab as SettingsTabId, section };
+  }
+  return null;
+}
+
+// Toggling the Pro interface remounts the whole settings surface (enabling
+// replaces the route with /pro, which hosts its own SettingsApp; disabling
+// leaves /pro through a full page load back to /settings). The active tab
+// survives via localStorage, but the content pane's scroll offset would not -
+// and the toggle itself sits at the bottom of a long tab, so the user would
+// land back at the top of the page they were just on. Module scope covers the
+// client-side navigation; sessionStorage carries the offset across the full
+// page load, with a TTL so a stray unconsumed entry can't scroll a visit
+// minutes later.
+let parkedContentScroll: { tab: SettingsTabId; top: number; ts: number } | null = null;
+const SCROLL_RESTORE_KEY = 'settings-scroll-restore';
+
+export interface SettingsAppProps {
+  /** Path segments after `/settings` - `['<tabId>']`. */
+  linkSegments?: string[];
+}
+
+/** A field, editor or list that takes typed characters itself. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
+/** Settings pages that share their name with an app in the palette's Go to group. */
+const APP_SETTINGS_TABS = new Set(['calendar', 'contacts', 'files']);
+
+/** A search result for a row the page shows only with Advanced on: opening it shows the row anyway. */
+function SearchResultAdvancedBadge({ label }: { label: string }) {
+  return (
+    <span data-testid="settings-result-advanced" className="shrink-0 text-[0.625rem] px-1.5 py-0.5 rounded bg-accent text-accent-foreground font-medium">
+      {label}
+    </span>
+  );
+}
+
+export function SettingsApp({ linkSegments: routeSegments }: SettingsAppProps = {}) {
+  // Static Lite build: the route params are empty, read the link from the URL.
+  const linkSegments = useLiteLinkSegments('settings', routeSegments);
+  const router = useRouter();
+  const t = useTranslations('settings');
+  const tSidebar = useTranslations('sidebar');
+  const tRoot = useTranslations();
+  const tShell = useTranslations('shell');
+  const tDelegates = useTranslations('delegates');
+  const tPalette = useTranslations('command_palette');
+  const skeletonLabels = useSkeletonLabels();
+  const { client, isAuthenticated, logout, checkAuth, isLoading: authLoading } = useAuthStore();
+  const { showAppsModal, inlineApp, loadedApps, handleManageApps, handleInlineApp, closeInlineApp, closeAppsModal } = useSidebarApps();
+  const isEmbedded = useIsEmbedded();
+  // Mountain View's desktop chrome: its top bar in place of the left rail.
+  const mvShell = useMountainViewShell(isEmbedded);
+  const [initialCheckDone, setInitialCheckDone] = useState(() => useAuthStore.getState().isAuthenticated && !!useAuthStore.getState().client);
+  const { quota, isPushConnected } = useEmailStore();
+  const { stalwartFeaturesEnabled, appName: configAppName } = useConfig();
+  const appName = productName(configAppName);
+  const { isFeatureEnabled } = usePolicyStore();
+  const archiveActionEnabled = isFeatureEnabled('archiveActionEnabled');
+  const delegationHidden = useRestriction('delegation').hidden;
+  // Recover deleted items: asked of the server once per account (Enterprise license).
+  const recoveryAvailable = useDeletedItemsRecovery().available;
+  const tRecover = useTranslations('recover_deleted');
+  // A tab in the URL wins over the persisted one; without it, nothing changes.
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(
+    () => targetFromDeepLink(linkSegments)?.tab ?? readPersistedTab(),
+  );
+  // The section a link or event asked for; scrolled to once the page shows it.
+  const [pendingSection, setPendingSection] = useState<{ tab: SettingsTabId; id: string } | null>(() => {
+    const target = targetFromDeepLink(linkSegments);
+    return target?.section ? { tab: target.tab, id: target.section } : null;
+  });
+  // On the phone the tab list is a screen of its own: a link or event that
+  // names a page opens that page, with the list one Back below it.
+  const [mobileShowContent, setMobileShowContent] = useState(
+    () => targetFromDeepLink(linkSegments) !== null || hasOneShotDeepLink(),
+  );
+  const goTo = useCallback((target: SettingsTarget) => {
+    setActiveTab(target.tab);
+    setPendingSection(target.section ? { tab: target.tab, id: target.section } : null);
+    setMobileShowContent(true);
+  }, []);
+  // Active plugins that expose a `settings-section` slot — each becomes its own
+  // Settings menu entry. Referentially stable per registry mutation, so it is
+  // safe to feed useSyncExternalStore directly.
+  const pluginSettingsOffers = useSyncExternalStore(
+    pluginRegistrySubscribe,
+    () => pluginOffersForSlot('settings-section'),
+    () => pluginOffersForSlot('settings-section'),
+  );
+  // Active plugins that offer a `settings-page` slot: one page each.
+  const pluginPageOffers = useSyncExternalStore(
+    pluginRegistrySubscribe,
+    () => pluginOffersForSlot('settings-page'),
+    () => pluginOffersForSlot('settings-page'),
+  );
+  const pluginPageIds = useMemo(() => new Set(pluginPageOffers.map((offer) => offer.pluginId)), [pluginPageOffers]);
+  const pluginSectionIds = useMemo(() => new Set(pluginSettingsOffers.map((offer) => offer.pluginId)), [pluginSettingsOffers]);
+  // Consume the one-shot deep-link key so a section gear only steers this one
+  // open, never the persisted default for future Settings-button clicks.
+  useEffect(() => {
+    try { sessionStorage.removeItem('settings-deep-link-tab'); } catch { /* ignore */ }
+  }, []);
+  // Inside the Pro shell there is no route to read the tab from, so it arrives
+  // through the handoff the redirect parked (#733).
+  useEffect(() => {
+    if (linkSegments) return;
+    const target = targetFromDeepLink(consumePendingDeepLink('settings'));
+    if (target) goTo(target);
+  }, [linkSegments, goTo]);
+  // Pro shell only: this surface stays mounted for the whole session, so links
+  // arriving later (e.g. the sidebar's folder-settings gear) are delivered
+  // live instead of being parked for a mount that already happened.
+  useEffect(() => {
+    if (!isEmbedded) return;
+    return subscribePendingDeepLink('settings', (segments) => {
+      const target = targetFromDeepLink(segments);
+      if (target) goTo(target);
+    });
+  }, [isEmbedded, goTo]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [pendingHighlight, setPendingHighlight] = useState<{ tab: SettingsTabId; label: string; pluginId?: string; advanced?: boolean } | null>(null);
+  const isDesktop = useIsDesktop();
+  // Narrowing the window (or turning a tablet) keeps the page that was open
+  // instead of dropping back to the page list.
+  const wasDesktop = useRef(isDesktop);
+  useEffect(() => {
+    if (wasDesktop.current && !isDesktop) setMobileShowContent(true);
+    wasDesktop.current = isDesktop;
+  }, [isDesktop]);
+
+  const messages = useMessages() as Record<string, unknown>;
+  const installedPlugins = usePluginStore((s) => s.plugins);
+  const installedThemes = useThemeStore((s) => s.installedThemes);
+  // Admin-pinned apps are searchable too - users can't add them, but they're listed.
+  const sidebarAppsList = useResolvedSidebarApps();
+  const proInterface = useSettingsStore((s) => s.proInterface);
+  const showAdvancedSettings = useSettingsStore((s) => s.showAdvancedSettings);
+
+  // When set, the settings panel is scoped to a shared/group account: a reduced
+  // tab list and a "Managing: <name>" header. null = the user's own account.
+  const managedAccountId = useManagedAccountStore((s) => s.managedAccountId);
+  const managedAccount = useManagedAccountStore((s) => s.managedAccount);
+  const clearManagedAccount = useManagedAccountStore((s) => s.clear);
+
+  // Build a per-tab haystack for fulltext search and a list of sub-results
+  // (individual settings) per tab: the rows each page draws (see
+  // lib/settings-search.ts), plus dynamic content (installed
+  // plugins/themes/sidebar apps).
+  const touchScreen = useMediaQuery('(pointer: coarse)');
+  const mountainViewLayout = useSettingsStore((s) => s.interfaceLayout === 'mountain-view');
+  const multiAccount = useAccountStore((s) => s.accounts.length > 0);
+  const { tabSearchHaystacks, tabSubResults } = useMemo(() => {
+    const haystacks: Partial<Record<Tab, string>> = {};
+    const subs: Partial<Record<Tab, SubResult[]>> = {};
+    // Only rows the page draws right now, so every result lands on one.
+    const shown = (entry: SettingsSearchEntry) => {
+      if (!archiveActionEnabled && ARCHIVE_ACTION_SEARCH_PATHS.has(entry.label)) return false;
+      if (entry.when === 'touch') return touchScreen;
+      if (entry.when === 'mountainView') return mountainViewLayout;
+      if (entry.when === 'multiAccount') return multiAccount;
+      // The desktop app's own rows (settings-p2-5), and the browser's that it hides.
+      const desktop = getDesktopBridge();
+      if (entry.when === 'desktop') return !!desktop;
+      if (entry.when === 'desktopMac') return desktop?.platform === 'darwin';
+      if (entry.when === 'desktopNotMac') return !!desktop && desktop.platform !== 'darwin';
+      if (entry.when === 'desktopMenuBar') return menuBarAvailable();
+      if (entry.when === 'browser') return !desktop;
+      return true;
+    };
+    for (const tabId of Object.keys(tabSearchEntries) as Tab[]) {
+      const tabName = getByPath(messages, settingsTabLabelKey(tabId));
+      const list = settingsSubResults(messages, tabId, appName, shown)
+        // A section titled like its page is the page itself.
+        .filter((r) => r.label !== tabName);
+      const seen = new Set<string>();
+      subs[tabId] = list.filter((r) => {
+        if (seen.has(r.label)) return false;
+        seen.add(r.label);
+        return true;
+      });
+      haystacks[tabId] = [
+        tabId.replace(/_/g, ' '),
+        tabKeywords[tabId] ?? '',
+        ...list.map(subResultText),
+      ].join(' ').toLowerCase();
+    }
+    if (installedPlugins.length) {
+      const haystackText = installedPlugins.map((p) => {
+        const fieldText = p.settingsSchema
+          ? Object.values(p.settingsSchema)
+              .map((s) => `${s.label} ${s.description ?? ''}`)
+              .join(' ')
+          : '';
+        return `${p.name} ${p.description} ${p.author} ${fieldText}`;
+      }).join(' ');
+      haystacks.addons = `${haystacks.addons ?? ''} ${haystackText}`.toLowerCase();
+      const pluginSubs: SubResult[] = installedPlugins.flatMap((p) => {
+        const items: SubResult[] = [{ label: p.name, description: p.description, keywords: p.author }];
+        if (p.settingsSchema) {
+          for (const schema of Object.values(p.settingsSchema)) {
+            items.push({
+              label: schema.label,
+              description: schema.description,
+              pluginId: p.id,
+            });
+          }
+        }
+        return items;
+      });
+      subs.addons = [...(subs.addons ?? []), ...pluginSubs];
+    }
+    // Themes are a section of Appearance now, so installed themes match there.
+    if (installedThemes.length) {
+      const text = installedThemes.map((th) => `${th.name} ${th.description} ${th.author}`).join(' ');
+      haystacks.appearance = `${haystacks.appearance ?? ''} ${text}`.toLowerCase();
+      subs.appearance = [
+        ...(subs.appearance ?? []),
+        ...installedThemes.map((th) => ({ label: th.name, description: th.description, keywords: th.author })),
+      ];
+    }
+    if (sidebarAppsList.length) {
+      const text = sidebarAppsList.map((a) => `${a.name} ${a.url}`).join(' ');
+      haystacks.addons = `${haystacks.addons ?? ''} ${text}`.toLowerCase();
+      subs.addons = [
+        ...(subs.addons ?? []),
+        ...sidebarAppsList.map((a) => ({ label: a.name, description: a.url })),
+      ];
+    }
+    return { tabSearchHaystacks: haystacks, tabSubResults: subs };
+  }, [messages, installedPlugins, installedThemes, sidebarAppsList, archiveActionEnabled, appName, touchScreen, mountainViewLayout, multiAccount]);
+
+  // Sidebar resize state
+  const [settingsSidebarWidth, setSettingsSidebarWidth] = useState(() => {
+    try { const v = localStorage.getItem('settings-sidebar-width'); return v ? Number(v) : 256; } catch { return 256; }
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const dragStartWidth = useRef(256);
+  // The phone's page list keeps its place while a page is open on top of it.
+  const mobileListScrollTop = useRef(0);
+  const attachMobileList = useCallback((el: HTMLElement | null) => {
+    if (el) el.scrollTop = mobileListScrollTop.current;
+  }, []);
+
+  // Check auth on mount – skip when already authenticated so that navigating
+  // between routes doesn't retrigger checkAuth's transient `{ client: null,
+  // isLoading: true }` reset, which was flashing the spinner on every nav.
+  useEffect(() => {
+    const state = useAuthStore.getState();
+    if (state.isAuthenticated && state.client) {
+      setInitialCheckDone(true);
+      return;
+    }
+    checkAuth().finally(() => {
+      setInitialCheckDone(true);
+    });
+  }, [checkAuth]);
+
+  // Listen for tab change events from child components (with legacy
+  // migration). The detail is a tab id, or `{ tab, section }` to land on one
+  // section of the page.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as string | { tab?: string; section?: string } | null;
+      const raw = typeof detail === 'string' ? detail : detail?.tab;
+      if (!raw) return;
+      const { tab, section } = migrateTarget(raw, typeof detail === 'object' && detail?.section ? detail.section : null);
+      goTo({ tab: tab as SettingsTabId, section });
+      try { localStorage.setItem('settings-active-tab', tab); } catch { /* ignore */ }
+    };
+    window.addEventListener('settings-tab-change', handler);
+    return () => window.removeEventListener('settings-tab-change', handler);
+  }, [goTo]);
+
+  // Scroll to the section a link or event asked for once the page has it.
+  // Pages fetch and render their sections after a loading state, so retry;
+  // an advanced section stays hidden until the switch is on, so after a
+  // short wait the page shows that section alone, once, and the switch stays
+  // as it is (settings-p3-7).
+  // The page itself rather than its skeleton (see the gate below).
+  const pageShown = isAuthenticated && !!client;
+  useEffect(() => {
+    if (!pendingSection || pendingSection.tab !== activeTab) return;
+    // The skeleton has no sections: wait until the page is drawn.
+    if (!pageShown) return;
+    if (typeof window === 'undefined') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now();
+    const deadline = started + 2400;
+    let asked = false;
+    const attempt = () => {
+      if (cancelled) return;
+      if (scrollToSettingsSection(pendingSection.id)) { setPendingSection(null); return; }
+      if (!asked && Date.now() - started > 400) {
+        asked = true;
+        window.dispatchEvent(new CustomEvent('settings-reveal', { detail: { section: pendingSection.id, advanced: true } }));
+      }
+      if (Date.now() < deadline) timer = setTimeout(attempt, 80);
+      else setPendingSection(null);
+    };
+    const raf = window.requestAnimationFrame(attempt);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      if (timer) clearTimeout(timer);
+    };
+  }, [pendingSection, activeTab, pageShown]);
+
+  // Leaving the settings panel drops any shared-account scope so it never
+  // leaks into the next visit or another session.
+  useEffect(() => () => clearManagedAccount(), [clearManagedAccount]);
+
+  useEffect(() => {
+    if (initialCheckDone && !isAuthenticated && !authLoading) {
+      saveRedirectAfterLogin();
+      redirectToLogin();
+    }
+  }, [initialCheckDone, isAuthenticated, authLoading]);
+
+  // Sync the mobile submenu view with browser history so the system back
+  // button (or gesture) returns to the settings list before exiting /settings.
+  useEffect(() => {
+    if (isDesktop) return;
+    if (typeof window === 'undefined') return;
+    if (!mobileShowContent) return;
+    // The first hydration pass reports a phone layout on every screen.
+    if (!isEmbedded && window.matchMedia(atLeast(PHONE_BELOW)).matches) return;
+
+    // A page opened straight from a link has no list below it yet: turn the
+    // entry it arrived on into the list, then push the page on top. Inside
+    // the Pro shell /pro owns the address bar, so its URL stays.
+    if (!isEmbedded) {
+      const listPath = appPath(buildSettingsPath(null));
+      const here = window.location.pathname;
+      if (here !== listPath && here.startsWith(`${listPath}/`)) {
+        window.history.replaceState(window.history.state, '', listPath);
+      }
+    }
+    // Once per open page: this runs again each time the window crosses the
+    // phone breakpoint, and the entry from the last crossing is still there.
+    // Back leaves that entry, so opening a page afterwards adds a new one.
+    if (!(window.history.state as { __settingsSubmenu?: boolean } | null)?.__settingsSubmenu) {
+      window.history.pushState({ __settingsSubmenu: true }, '');
+    }
+
+    const handlePop = () => {
+      setMobileShowContent(false);
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, [isDesktop, isEmbedded, mobileShowContent]);
+
+  // After clicking a search sub-result, scroll the matching setting into view
+  // and add a temporary highlight class. Some tabs fetch data and render
+  // their SettingItems only after a loading state, so retry until the element
+  // shows up (or we give up after ~2s).
+  useEffect(() => {
+    if (!pendingHighlight) return;
+    if (pendingHighlight.tab !== activeTab) return;
+    if (typeof window === 'undefined') return;
+
+    // For plugin-setting sub-results, ask the plugins tab to expand the
+    // matching card so the field becomes part of the DOM. Dispatched here
+    // (not in the click handler) because PluginsSettings only mounts after
+    // the tab switches, and its listener registers in its own useEffect -
+    // child effects run before parent effects, so by the time we get here
+    // the listener is guaranteed to be in place.
+    if (pendingHighlight.pluginId) {
+      window.dispatchEvent(
+        new CustomEvent('settings-plugin-expand', { detail: { pluginId: pendingHighlight.pluginId } })
+      );
+    }
+    // Collapsed lists (the theme gallery) open when the result is inside them,
+    // and an advanced row shows by itself, the Advanced switch left as it is
+    // (settings-p3-7). Only a row known to be advanced: any other stays as it is.
+    window.dispatchEvent(new CustomEvent('settings-reveal', { detail: { label: pendingHighlight.label, advanced: pendingHighlight.advanced } }));
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+    let highlightedEl: HTMLElement | null = null;
+
+    const escaped = pendingHighlight.label.replace(/"/g, '\\"');
+    const selector = `[data-search-label="${escaped}"]`;
+    const deadline = Date.now() + 2400;
+
+    const tryHighlight = () => {
+      if (cancelled) return;
+      const el = document.querySelector<HTMLElement>(selector);
+      if (!el) {
+        if (Date.now() < deadline) {
+          retryTimer = setTimeout(tryHighlight, 80);
+        }
+        return;
+      }
+      el.scrollIntoView({ behavior: scrollBehavior(), block: 'center' });
+      // Remove + reflow + add restarts the CSS animation if the class was
+      // already present (re-clicking the same sub-result).
+      el.classList.remove('settings-search-highlight');
+      void el.offsetWidth;
+      el.classList.add('settings-search-highlight');
+      highlightedEl = el;
+      cleanupTimer = setTimeout(() => {
+        el.classList.remove('settings-search-highlight');
+        highlightedEl = null;
+      }, 1800);
+    };
+
+    // First attempt next frame so the freshly-mounted tab content is in DOM.
+    const raf = window.requestAnimationFrame(tryHighlight);
+
+    // Do NOT reset pendingHighlight here - that would retrigger this effect
+    // and the cleanup below would strip the class right after we added it.
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      if (retryTimer) clearTimeout(retryTimer);
+      if (cleanupTimer) clearTimeout(cleanupTimer);
+      if (highlightedEl) highlightedEl.classList.remove('settings-search-highlight');
+    };
+  }, [pendingHighlight, activeTab]);
+
+  // The permalink for the open tab (#733). Suppressed inside the Pro shell,
+  // where /pro owns the address bar. On mobile the tab list is its own screen,
+  // so the tab is only in the URL once the user is looking at its content.
+  // Must sit above the early return below - it is a hook.
+  const proInterfaceActive = useProInterfaceActive();
+  const isFocusedProTab = useIsFocusedProTab();
+  const settingsLinkPath = appPath(buildSettingsPath(!isDesktop && !mobileShowContent ? null : activeTab));
+  useDeepLinkUrl(
+    !isAuthenticated
+      ? null
+      : isEmbedded
+        ? (isFocusedProTab ? settingsLinkPath : null)
+        : proInterfaceActive ? null : settingsLinkPath,
+  );
+
+  // "/" (the mail search's key) and Ctrl+F (Cmd+F) go to "Search settings" on any
+  // settings page (settings-p3-18). "/" waits while someone types in a field; a
+  // second Ctrl+F in the search field is the browser's own find. In the desktop
+  // app the menu's Search and its Ctrl+F (edit.search) land here too.
+  const searchFieldRef = useRef<HTMLInputElement>(null);
+  const focusSettingsSearch = useCallback(() => {
+    const field = searchFieldRef.current;
+    if (!field) return false;
+    field.focus();
+    field.select();
+    return true;
+  }, []);
+  const searchKeysActive = isAuthenticated && (!isEmbedded || isFocusedProTab);
+  useEffect(() => {
+    if (!searchKeysActive) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const slash = event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const find = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f';
+      if (!slash && !find) return;
+      const field = searchFieldRef.current;
+      if (!field || document.activeElement === field) return;
+      if (slash && isTypingTarget(event.target)) return;
+      // A dialog on top keeps its keys.
+      if (document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"]')) return;
+      if (focusSettingsSearch()) event.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [searchKeysActive, focusSettingsSearch]);
+  useDesktopCommands({ 'edit.search': () => { focusSettingsSearch(); } }, { 'edit.search': true }, searchKeysActive);
+
+  // Park the content-pane scroll offset when the Pro toggle flips (the flip
+  // remounts this component - see parkedContentScroll above). The ref only
+  // exists in the desktop layout, which is also the only place the remount
+  // can happen - on mobile `el` stays null and nothing is parked.
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const prevProInterface = useRef(proInterface);
+  useEffect(() => {
+    if (prevProInterface.current === proInterface) return;
+    prevProInterface.current = proInterface;
+    const el = contentScrollRef.current;
+    if (!el) return;
+    parkedContentScroll = { tab: activeTab, top: el.scrollTop, ts: Date.now() };
+    try { sessionStorage.setItem(SCROLL_RESTORE_KEY, JSON.stringify(parkedContentScroll)); } catch { /* ignore */ }
+  }, [proInterface, activeTab]);
+  // Restore when the container mounts. A callback ref rather than a mount
+  // effect: after the Pro-off reload this component first renders without the
+  // container (auth check pending), so a mount-time effect would consume the
+  // parked offset before there is anything to scroll.
+  const attachContentScroll = useCallback((el: HTMLDivElement | null) => {
+    contentScrollRef.current = el;
+    if (!el) return;
+    let parked = parkedContentScroll;
+    parkedContentScroll = null;
+    try {
+      const raw = sessionStorage.getItem(SCROLL_RESTORE_KEY);
+      if (raw) {
+        sessionStorage.removeItem(SCROLL_RESTORE_KEY);
+        parked = parked ?? (JSON.parse(raw) as NonNullable<typeof parkedContentScroll>);
+      }
+    } catch { /* ignore */ }
+    if (parked && parked.tab === activeTab && Date.now() - parked.ts < 60_000) {
+      el.scrollTop = parked.top;
+    }
+  }, [activeTab]);
+
+  const supportsVacation = client?.supportsVacationResponse() ?? false;
+  const supportsCalendar = client?.supportsCalendars() ?? false;
+  const supportsSieve = client?.supportsSieve() ?? false;
+  const supportsFiles = client?.supportsFiles() ?? false;
+  // Files on this computer: the desktop app's sync engine runs in this window.
+  // Nothing to set when the organisation turned off both the drive and synced folders and none is left (files-p3-18).
+  const inDesktopApp = useInDesktopApp();
+  const filesSyncAvailable = useFilesSyncStore((s) => s.available && !(s.folderSyncForcedOff && (!s.drive || s.drive.forcedOff || !s.drive.supported) && s.roots.length === 0));
+  // Delegates (Settings > Sharing) needs someone to share with and something to share.
+  const supportsSharing = !delegationHidden && !!client?.getShareTargets && (client?.supportsPrincipals() ?? false)
+    && ((client?.supportsMailboxSharing?.() ?? false)
+      || (supportsCalendar && isFeatureEnabled('calendarEnabled'))
+      || ((client?.supportsContacts() ?? false) && isFeatureEnabled('contactsEnabled')));
+
+  const tabs: TabDef[] = [
+    // You and the app
+    { id: 'account', label: t('tabs.account'), icon: tabIcons.account, group: 'top' },
+    ...(stalwartFeaturesEnabled ? [{ id: 'security' as Tab, label: tRoot(settingsTabLabelKey('security')), icon: tabIcons.security, group: 'top' as TabGroup }] : []),
+    { id: 'privacy', label: tRoot(settingsTabLabelKey('privacy')), icon: tabIcons.privacy, group: 'top' },
+    ...(supportsSharing ? [{ id: 'sharing' as Tab, label: tDelegates('tab'), icon: tabIcons.sharing, group: 'top' as TabGroup }] : []),
+    { id: 'notifications', label: t('tabs.notifications'), icon: tabIcons.notifications, group: 'top' },
+    { id: 'general', label: t('tabs.general'), icon: tabIcons.general, group: 'top' },
+    // The desktop app's own page: tray, start at sign-in, windows, shortcuts, mail links.
+    ...(inDesktopApp ? [{ id: 'desktop' as Tab, label: tRoot(settingsTabLabelKey('desktop')), icon: tabIcons.desktop, group: 'top' as TabGroup }] : []),
+    // Keeping mail on this device; the static Lite build has no offline mode.
+    ...(!IS_LITE ? [{ id: 'offline' as Tab, label: tRoot(settingsTabLabelKey('offline')), icon: tabIcons.offline, group: 'top' as TabGroup }] : []),
+    { id: 'appearance', label: t('tabs.appearance'), icon: tabIcons.appearance, group: 'top' },
+    { id: 'accessibility', label: t('tabs.accessibility'), icon: tabIcons.accessibility, group: 'top' },
+
+    // Mail
+    { id: 'message_list', label: t('tabs.message_list'), icon: tabIcons.message_list, group: 'mail' },
+    { id: 'reading', label: t('tabs.reading'), icon: tabIcons.reading, group: 'mail' },
+    { id: 'composing', label: t('tabs.composing'), icon: tabIcons.composing, group: 'mail' },
+    { id: 'organize', label: isFeatureEnabled('customKeywordsEnabled') ? t('tabs.organize') : t('tabs.folders'), icon: tabIcons.organize, group: 'mail' },
+    ...(supportsSieve ? [{ id: 'filters' as Tab, label: t('tabs.filters'), icon: tabIcons.filters, group: 'mail' as TabGroup }] : []),
+    ...(supportsVacation ? [{ id: 'vacation' as Tab, label: t('tabs.vacation'), icon: tabIcons.vacation, group: 'mail' as TabGroup }] : []),
+    ...(recoveryAvailable ? [{ id: RECOVERY_SETTINGS_TAB as Tab, label: tRecover('tab'), icon: tabIcons.recovery, group: 'mail' as TabGroup }] : []),
+
+    // Apps
+    ...(supportsCalendar && isFeatureEnabled('calendarEnabled') ? [{ id: 'calendar' as Tab, label: t('tabs.calendar'), icon: tabIcons.calendar, group: 'apps' as TabGroup }] : []),
+    ...(isFeatureEnabled('contactsEnabled') ? [{ id: 'contacts' as Tab, label: t('tabs.contacts'), icon: tabIcons.contacts, group: 'apps' as TabGroup }] : []),
+    ...(supportsFiles && isFeatureEnabled('filesEnabled') ? [{ id: 'files' as Tab, label: t('tabs.files'), icon: tabIcons.files, group: 'apps' as TabGroup }] : []),
+    ...(filesSyncAvailable && supportsFiles && isFeatureEnabled('filesEnabled') ? [{ id: 'files_sync' as Tab, label: tRoot(settingsTabLabelKey('files_sync')), icon: tabIcons.files_sync, group: 'apps' as TabGroup }] : []),
+    ...(isFeatureEnabled('sidebarAppsEnabled') || isFeatureEnabled('pluginsEnabled') ? [{ id: 'addons' as Tab, label: t('tabs.addons'), icon: tabIcons.addons, group: 'apps' as TabGroup }] : []),
+    // Plugin-contributed pages nest under Add-ons: a page of its own for each
+    // plugin that offers one, and an entry for each plugin that offers only a
+    // `settings-section` slot (e.g. S/MIME key & certificate manager). A plugin
+    // with both gets the page entry only, with the section on its page.
+    ...pluginPageOffers.map((offer): TabDef => ({
+      id: `${PLUGIN_PAGE_PREFIX}${offer.pluginId}` as PluginPageTabId,
+      label: getActivePlugin(offer.pluginId)?.plugin.name || offer.pluginId,
+      icon: Puzzle,
+      group: 'apps',
+      sub: true,
+    })),
+    ...pluginSettingsOffers.filter((offer) => !pluginPageIds.has(offer.pluginId)).map((offer): TabDef => ({
+      id: `plugin:${offer.pluginId}` as PluginTabId,
+      label: getActivePlugin(offer.pluginId)?.plugin.name ?? offer.pluginId,
+      icon: Puzzle,
+      group: 'apps',
+      sub: true,
+    })),
+
+    // After a rule at the end, with no heading.
+    { id: 'backup', label: tRoot(settingsTabLabelKey('backup')), icon: tabIcons.backup, group: 'bottom' },
+    // Listed only with advanced settings on (ADVANCED_ONLY_TABS); search and links open it anyway.
+    { id: 'troubleshooting', label: tRoot(settingsTabLabelKey('troubleshooting')), icon: tabIcons.troubleshooting, group: 'bottom' },
+    { id: 'about', label: tRoot(settingsTabLabelKey('about', inDesktopApp)), icon: tabIcons.about, group: 'bottom' },
+  ];
+
+  // In scoped (shared-account) mode, restrict to the account-relevant tabs the
+  // account actually advertises. Folders is intentionally excluded (mailbox CRUD
+  // is hardwired to the active account). Gated on both the per-account
+  // capability and the session-level support/feature flags.
+  const scopedTabIds: Tab[] = managedAccount
+    ? ([
+        managedAccount.capabilities.sieve && supportsSieve ? 'filters' : null,
+        managedAccount.capabilities.mail && supportsVacation ? 'vacation' : null,
+        managedAccount.capabilities.calendars && supportsCalendar && isFeatureEnabled('calendarEnabled') ? 'calendar' : null,
+        managedAccount.capabilities.contacts && isFeatureEnabled('contactsEnabled') ? 'contacts' : null,
+      ].filter(Boolean) as Tab[])
+    : [];
+  const visibleTabs = managedAccountId
+    ? tabs.filter((tab) => scopedTabIds.includes(tab.id as Tab))
+    : tabs;
+
+  // Every word of the query starts a word, in any order. A page matches by
+  // its own name and keywords, or when one of its rows has all the words:
+  // words spread over unrelated rows don't make a match.
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+
+  // Troubleshooting is in the list only with "Show advanced settings" on, while
+  // it is open, or when a search finds it: its rows are for when something
+  // goes wrong, and a result or link still opens them.
+  const listedTabs = visibleTabs.filter((tab) => !ADVANCED_ONLY_TABS.has(tab.id as Tab)
+    || showAdvancedSettings || !!trimmedQuery || tab.id === activeTab);
+
+  // Group tabs by category. Only Mail and Apps carry a heading.
+  const groupedTabs = tabGroupOrder
+    .map((group) => ({
+      group,
+      label: group === 'mail' || group === 'apps' ? t(`tab_groups.${group}`) : null,
+      items: listedTabs.filter((tab) => tab.group === group),
+    }))
+    .filter((g) => g.items.length > 0);
+  const matchesQuery = (tab: TabDef) => {
+    if (!trimmedQuery) return true;
+    const pageText = `${tab.label} ${String(tab.id).replace(/_/g, ' ')} ${tabKeywords[tab.id as Tab] ?? ''}`;
+    return matchesAllWords(pageText, trimmedQuery)
+      || (tabSubResults[tab.id as Tab] ?? []).some((r) => matchesSubResult(r, trimmedQuery));
+  };
+
+  const subResultsForTab = (tabId: SettingsTabId): SubResult[] => {
+    if (!trimmedQuery) return [];
+    const list = tabSubResults[tabId as Tab] ?? [];
+    // Rows whose name matches come before rows matched by their description or synonyms.
+    const byName = (r: SubResult) => (matchesAllWords(r.label, trimmedQuery) ? 0 : 1);
+    return list
+      .filter((r) => matchesSubResult(r, trimmedQuery))
+      .sort((a, b) => byName(a) - byName(b))
+      .slice(0, 6);
+  };
+
+  const filteredGroupedTabs = trimmedQuery
+    ? groupedTabs
+        .map((g) => ({ ...g, items: g.items.filter(matchesQuery) }))
+        .filter((g) => g.items.length > 0)
+    : groupedTabs;
+
+  // If active tab is not in the visible list (e.g., feature disabled, or scoped
+  // mode hides it), fall back. In scoped mode fall back to the first scoped tab;
+  // otherwise the usual 'appearance' default.
+  // An old link or remembered tab to the section of a plugin that now has a
+  // page of its own opens that page, where the section is.
+  const sectionPluginId = activeTab.startsWith('plugin:') ? activeTab.slice('plugin:'.length) : null;
+  const requestedTab: SettingsTabId = sectionPluginId && pluginPageIds.has(sectionPluginId)
+    ? (`${PLUGIN_PAGE_PREFIX}${sectionPluginId}` as PluginPageTabId)
+    : activeTab;
+  const isActiveVisible = visibleTabs.some((tab) => tab.id === requestedTab);
+  const effectiveActiveTab: SettingsTabId = isActiveVisible
+    ? requestedTab
+    : (managedAccountId ? (visibleTabs[0]?.id ?? 'appearance') : 'appearance');
+
+  // "<Page> - Settings - <account> - <app>" (WCAG 2.4.2). On a phone the
+  // page list alone, with no page open, is just Settings.
+  const activeTabLabel = visibleTabs.find((tab) => tab.id === effectiveActiveTab)?.label ?? '';
+
+  // The plugin side panel (app-side-panel), with the open page. Docked on
+  // desktop under a row with the page's name and its button; below 1024 px
+  // Settings is phone-shaped and the panel opens as a dialog.
+  const sidePanelContext = useMemo(
+    () => ({ page: { id: String(effectiveActiveTab), label: activeTabLabel } }),
+    [effectiveActiveTab, activeTabLabel],
+  );
+  const sidePanel = useAppSidePanel({ view: 'settings', context: sidePanelContext, dock: isDesktop });
+  useDocumentTitle(
+    activeTabLabel && (isDesktop || mobileShowContent)
+      ? `${activeTabLabel} - ${tSidebar('settings')}`
+      : tSidebar('settings'),
+  );
+  useDesktopWindowName(tSidebar('settings'), { withAccount: true });
+
+  const handleTabSelect = (tabId: SettingsTabId) => {
+    setActiveTab(tabId);
+    setPendingSection(null);
+    try { localStorage.setItem('settings-active-tab', tabId); } catch { /* ignore */ }
+    if (!isDesktop) {
+      setMobileShowContent(true);
+    }
+  };
+
+  const handleSubResultSelect = (tabId: SettingsTabId, sub: SubResult) => {
+    handleTabSelect(tabId);
+    setPendingHighlight({ tab: tabId, label: sub.label, pluginId: sub.pluginId, advanced: sub.advanced });
+  };
+
+  // Ctrl/⌘+K in Settings: one "Go to <page>" per page shown in the list,
+  // found by the same words as the settings search ("out of office", "app
+  // password", "add rule"). The pages named after an app say "settings", so
+  // they don't read as the app's own "Go to Calendar" next to them.
+  useRegisterCommands(
+    tSidebar('settings'),
+    visibleTabs.map((tab) => ({
+      id: `go-${tab.id}`,
+      label: APP_SETTINGS_TABS.has(tab.id)
+        ? tPalette('go_to_settings_page', { name: tab.label })
+        : tPalette('go_to', { name: tab.label }),
+      icon: tab.icon,
+      keywords: [tabSearchHaystacks[tab.id as Tab] ?? ''],
+      run: () => handleTabSelect(tab.id),
+      when: () => tab.id !== effectiveActiveTab,
+    })),
+    isAuthenticated,
+  );
+
+  // Which pages this account has, for the next load's skeleton nav
+  // (lib/boot-skeleton/hints.ts). Only the account's own list, once its
+  // capabilities are known; plugin entries are left out.
+  const hintedTabs = client && !managedAccountId
+    ? visibleTabs
+        .filter((tab) => !tab.id.includes(':') && (!ADVANCED_ONLY_TABS.has(tab.id as Tab) || showAdvancedSettings))
+        .map((tab) => tab.id).join(' ')
+    : null;
+  useEffect(() => {
+    if (hintedTabs) writeSettingsHints(hintedTabs.split(' '));
+  }, [hintedTabs]);
+
+  // Until the session is up, the page's skeleton (the same one the server
+  // drew). Waiting for the client, not only the persisted sign-in, means the
+  // nav renders once with the account's pages instead of growing as the
+  // capabilities arrive.
+  if (!isAuthenticated || !client) {
+    return isEmbedded
+      ? <SettingsSkeletonBody embedded />
+      : <SettingsSkeleton label={skeletonLabels.label} labels={skeletonLabels.labels} />;
+  }
+
+  const renderTabContent = () => (
+    <AdvancedSettingsProvider key={effectiveActiveTab}>
+      <SectionNav />
+      {managedAccountId && managedAccount && (
+        <button
+          type="button"
+          onClick={() => {
+            clearManagedAccount();
+            handleTabSelect('account');
+          }}
+          className="flex items-center gap-2 w-full mb-4 px-3 py-2 rounded-md border border-border bg-muted/40 hover:bg-muted text-start transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+          <span className="text-sm text-muted-foreground">{t('scoped.back')}</span>
+          <span className="ms-auto text-sm font-medium truncate">
+            {t('scoped.managing', { name: managedAccount.name })}
+          </span>
+        </button>
+      )}
+      {effectiveActiveTab === 'account' && <AccountSettings />}
+      {effectiveActiveTab === 'general' && <GeneralSettings supportsCalendar={supportsCalendar} />}
+      {effectiveActiveTab === 'notifications' && <NotificationSettings />}
+      {effectiveActiveTab === 'appearance' && <AppearanceSettings />}
+      {effectiveActiveTab === 'accessibility' && <AccessibilitySettings />}
+      {effectiveActiveTab === 'message_list' && <MessageListSettings />}
+      {effectiveActiveTab === 'reading' && <ReadingSettings />}
+      {effectiveActiveTab === 'composing' && <ComposingSettings />}
+      {effectiveActiveTab === 'vacation' && <VacationSettings />}
+      {effectiveActiveTab === 'filters' && <FilterSettings />}
+      {effectiveActiveTab === 'organize' && <OrganizeSettings />}
+      {effectiveActiveTab === 'security' && <AccountSecuritySettings />}
+      {effectiveActiveTab === 'sharing' && <DelegatesSettings />}
+      {effectiveActiveTab === RECOVERY_SETTINGS_TAB && <RecoverDeletedSettings />}
+      {effectiveActiveTab === 'calendar' && (
+        managedAccountId
+          ? <CalendarManagementSettings />
+          : <><CalendarSettings /><div className="mt-8"><CalendarManagementSettings /></div></>
+      )}
+      {effectiveActiveTab === 'contacts' && (
+        managedAccountId
+          ? <AddressBookManagementSettings />
+          : <><ContactsSettings /><div className="mt-8"><AddressBookManagementSettings /></div></>
+      )}
+      {effectiveActiveTab === 'files' && <FilesSettingsComponent />}
+      {effectiveActiveTab === 'files_sync' && <DesktopFilesSettings />}
+      {effectiveActiveTab === 'addons' && <AddonsSettings />}
+      {effectiveActiveTab === 'privacy' && <PrivacySettings />}
+      {effectiveActiveTab === 'offline' && <OfflineSettings />}
+      {effectiveActiveTab === 'backup' && <AboutDataSettings />}
+      {effectiveActiveTab === 'desktop' && <DesktopAppSettings />}
+      {effectiveActiveTab === 'troubleshooting' && <TroubleshootingSettings />}
+      {effectiveActiveTab === 'about' && <AboutSettings />}
+      {effectiveActiveTab.startsWith('plugin:') && (
+        <PluginIframeSlot
+          key={effectiveActiveTab}
+          pluginId={effectiveActiveTab.slice('plugin:'.length)}
+          slot="settings-section"
+        />
+      )}
+      {effectiveActiveTab.startsWith(PLUGIN_PAGE_PREFIX) && (
+        <>
+          {/* The plugin's settings-section, on its page rather than as a
+              second entry with the same name. */}
+          {pluginSectionIds.has(effectiveActiveTab.slice(PLUGIN_PAGE_PREFIX.length)) && (
+            <div className="max-w-3xl mb-6" data-plugin-slot="settings-section">
+              <PluginIframeSlot
+                key={`${effectiveActiveTab}:section`}
+                pluginId={effectiveActiveTab.slice(PLUGIN_PAGE_PREFIX.length)}
+                slot="settings-section"
+              />
+            </div>
+          )}
+          <div className="w-full" data-plugin-slot="settings-page">
+            <PluginIframeSlot
+              key={effectiveActiveTab}
+              pluginId={effectiveActiveTab.slice(PLUGIN_PAGE_PREFIX.length)}
+              slot="settings-page"
+            />
+          </div>
+        </>
+      )}
+    </AdvancedSettingsProvider>
+  );
+
+  // Mobile layout
+  if (!isDesktop) {
+    if (mobileShowContent) {
+      return (
+        <div className={cn("flex flex-col bg-background pt-[var(--app-top-inset)]", isEmbedded ? "h-full" : "h-dvh")}>
+          <AppTopBannerSlot />
+          <div className="flex items-center gap-2 px-4 h-14 border-b border-border bg-background shrink-0">
+            <IconButton label={t('back_to_settings')} size="icon-lg" onClick={() => window.history.back()}>
+              <ArrowLeft />
+            </IconButton>
+            <h1 className="font-semibold text-lg truncate">{activeTabLabel}</h1>
+            <PhoneHeaderActions />
+          </div>
+
+          {/* A key per page: a page opens at its top, not at the scroll offset of the one before. */}
+          <AppMain key={effectiveActiveTab} embedded={isEmbedded} label={activeTabLabel} className="flex-1 overflow-y-auto p-4">
+            {renderTabContent()}
+          </AppMain>
+
+          {!isEmbedded && (
+            <NavigationRail
+              orientation="horizontal"
+              onManageApps={handleManageApps}
+              onInlineApp={handleInlineApp}
+              onCloseInlineApp={closeInlineApp}
+              activeAppId={inlineApp?.id ?? null}
+            />
+          )}
+          <SidebarAppsModal isOpen={showAppsModal} onClose={closeAppsModal} />
+        </div>
+      );
+    }
+
+    return (
+      <div className={cn("flex flex-col bg-background pt-[var(--app-top-inset)]", isEmbedded ? "h-full" : "h-dvh")}>
+        <AppTopBannerSlot />
+        <div className="flex items-center gap-2 px-4 h-14 border-b border-border bg-background shrink-0">
+          <IconButton label={t('back_to_mail')} size="icon-lg" onClick={() => router.push('/')}>
+            <ArrowLeft />
+          </IconButton>
+          <div className="flex items-center gap-2">
+            <SettingsIcon className="w-5 h-5 text-muted-foreground" />
+            <h1 className="font-semibold text-lg">{t('title')}</h1>
+          </div>
+          <PhoneHeaderActions />
+        </div>
+
+        <AppMain
+          key="settings-page-list"
+          ref={attachMobileList}
+          onScroll={(e) => { mobileListScrollTop.current = e.currentTarget.scrollTop; }}
+          embedded={isEmbedded}
+          label={t('title')}
+          className="flex-1 overflow-y-auto"
+          data-tour="settings-tabs"
+        >
+          <div className="px-4 pt-3 pb-1">
+            <ToolbarSearch
+              ref={searchFieldRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onClear={() => setSearchQuery('')}
+              clearLabel={t('search_clear')}
+              placeholder={t('search_placeholder')}
+              aria-label={t('search_placeholder')}
+              aria-keyshortcuts="/ Control+F"
+              autoComplete="off"
+            />
+          </div>
+          <div className="py-2">
+            {filteredGroupedTabs.length === 0 && (
+              <div className="px-5 py-6 text-sm text-muted-foreground text-center">
+                {t('search_no_results')}
+              </div>
+            )}
+            {filteredGroupedTabs.map((group, groupIndex) => (
+              <div key={group.group}>
+                {groupIndex > 0 && <div className="mx-5 my-2 border-t border-border" />}
+                {group.label && (
+                  <div className="px-5 pt-3 pb-1.5">
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {group.label}
+                    </span>
+                  </div>
+                )}
+                {group.items.map((tab) => {
+                  const Icon = tab.icon;
+                  const subs = subResultsForTab(tab.id);
+                  return (
+                    <div key={tab.id}>
+                      <button
+                        data-testid={`settings-tab-${tab.id}`}
+                        onClick={() => handleTabSelect(tab.id)}
+                        className={cn(
+                          'w-full flex items-center justify-between py-3.5 pe-5 text-sm text-foreground hover:bg-muted transition-colors duration-150',
+                          tab.sub ? 'ps-12' : 'ps-5',
+                        )}
+                      >
+                        <span className="flex items-center gap-3">
+                          <Icon className="w-4 h-4 text-muted-foreground" />
+                          {tab.label}
+                        </span>
+                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                      </button>
+                      {subs.map((sub) => (
+                        <button
+                          key={`${tab.id}:${sub.label}`}
+                          onClick={() => handleSubResultSelect(tab.id, sub)}
+                          className="w-full flex items-center gap-2 ps-12 pe-5 py-2 pointer-coarse:min-h-11 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors duration-150 text-start"
+                        >
+                          <span className="truncate" title={sub.label}>{sub.label}</span>
+                          {sub.advanced && <SearchResultAdvancedBadge label={t('advanced_switch.badge')} />}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          <div className="border-t border-border px-2 py-2">
+            <HelpLinks className="px-3 py-2" />
+            <AdvancedSettingsSwitch />
+          </div>
+          <div className="border-t border-border px-5 py-3">
+            <button
+              onClick={() => logout()}
+              className="w-full flex items-center gap-3 py-2.5 text-sm text-destructive hover:bg-muted rounded-md px-2 transition-colors duration-150"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>{tSidebar('sign_out')}</span>
+            </button>
+          </div>
+        </AppMain>
+
+        {!isEmbedded && (
+          <NavigationRail
+            orientation="horizontal"
+            onManageApps={handleManageApps}
+            onInlineApp={handleInlineApp}
+            onCloseInlineApp={closeInlineApp}
+            activeAppId={inlineApp?.id ?? null}
+          />
+        )}
+        <SidebarAppsModal isOpen={showAppsModal} onClose={closeAppsModal} />
+      </div>
+    );
+  }
+
+  // Desktop layout
+  const settingsMain = (
+      <AppMain key={effectiveActiveTab} ref={attachContentScroll as (el: HTMLElement | null) => void} embedded={isEmbedded} label={activeTabLabel} className="flex-1 overflow-y-auto">
+        <div className={effectiveActiveTab.startsWith(PLUGIN_PAGE_PREFIX) ? "px-6 py-6" : "max-w-3xl mx-auto px-6 py-6"}>
+          {/* The page's heading for screen readers; the sidebar shows which
+              page is open (the phone header has a visible one). */}
+          <h1 className="sr-only">{activeTabLabel}</h1>
+          {renderTabContent()}
+        </div>
+      </AppMain>
+  );
+  return (
+    <div className={cn("flex flex-col pt-[var(--app-top-inset)]", mvShell ? "bg-[var(--mv-canvas)]" : "bg-background", isEmbedded ? "h-full" : "h-dvh")}>
+      {!isEmbedded && <SkipLink>{tShell("skip_to_content")}</SkipLink>}
+      <AppTopBannerSlot />
+      {mvShell && (
+        <MvTopBar
+          showMenuButton={false}
+          onManageApps={handleManageApps}
+          onInlineApp={handleInlineApp}
+          onCloseInlineApp={closeInlineApp}
+          activeAppId={inlineApp?.id ?? null}
+        />
+      )}
+      <div data-mv-card={mvShell ? "" : undefined} className={cn("flex flex-1 min-h-0", mvShell && "mb-4 mx-4")}>
+      {!isEmbedded && !mvShell && (
+        <div className="w-14 bg-secondary flex flex-col flex-shrink-0" style={{ borderRight: '1px solid rgba(128, 128, 128, 0.3)' }}>
+          <NavigationRail
+            collapsed
+            quota={quota}
+            isPushConnected={isPushConnected}
+            onLogout={logout}
+            onManageApps={handleManageApps}
+            onInlineApp={handleInlineApp}
+            onCloseInlineApp={closeInlineApp}
+            activeAppId={inlineApp?.id ?? null}
+          />
+        </div>
+      )}
+
+      {inlineApp && (
+        <InlineAppView apps={loadedApps} activeAppId={inlineApp!.id} onClose={closeInlineApp} className="flex-1" />
+      )}
+      {!inlineApp && (
+      <>
+      <div
+        data-pane="sidebar"
+        className={cn(
+          "border-e border-border bg-secondary flex flex-col",
+          // A compact desktop keeps more of its width for the page.
+          "max-lg:max-w-52",
+          !isResizing && "transition-[width] duration-300"
+        )}
+        style={{ width: `${settingsSidebarWidth}px` }}
+      >
+        {!proInterface && (
+          // Same h-14 box as the mail sidebar's account switcher, so the apps line up.
+          <div className="border-b border-border">
+            <div className="flex items-center h-14 px-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push('/')}
+                className="w-full justify-start"
+              >
+                <ArrowLeft className="w-4 h-4 me-2" />
+                {t('back_to_mail')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <nav aria-label={t('title')} className="flex-1 overflow-y-auto py-2" data-tour="settings-tabs">
+          <div className="px-3 pt-1 pb-1">
+            <ToolbarSearch
+              ref={searchFieldRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onClear={() => setSearchQuery('')}
+              clearLabel={t('search_clear')}
+              placeholder={t('search_placeholder')}
+              aria-label={t('search_placeholder')}
+              aria-keyshortcuts="/ Control+F"
+              autoComplete="off"
+            />
+          </div>
+          <div className="px-3 space-y-0.5">
+            {filteredGroupedTabs.length === 0 && (
+              <div className="px-3 py-6 text-sm text-muted-foreground text-center">
+                {t('search_no_results')}
+              </div>
+            )}
+            {filteredGroupedTabs.map((group, groupIndex) => (
+              <div key={group.group}>
+                {groupIndex > 0 && <div className="mx-1 my-2 border-t border-border" />}
+                {group.label && (
+                  <div className="px-3 pt-2.5 pb-1">
+                    <span className="text-[0.6875rem] font-semibold text-muted-foreground">
+                      {group.label}
+                    </span>
+                  </div>
+                )}
+                {group.items.map((tab) => {
+                  const Icon = tab.icon;
+                  const subs = subResultsForTab(tab.id);
+                  return (
+                    <div key={tab.id}>
+                      <button
+                        data-testid={`settings-tab-${tab.id}`}
+                        aria-current={effectiveActiveTab === tab.id ? 'page' : undefined}
+                        onClick={() => handleTabSelect(tab.id)}
+                        className={cn(
+                          'w-full text-start py-2 pe-3 rounded-md text-sm transition-colors duration-150 flex items-center gap-2.5',
+                          tab.sub ? 'ps-9' : 'ps-3',
+                          effectiveActiveTab === tab.id
+                            ? 'bg-accent text-accent-foreground font-medium'
+                            : 'hover:bg-muted text-foreground'
+                        )}
+                      >
+                        <Icon className={cn(
+                          'w-4 h-4 shrink-0',
+                          effectiveActiveTab === tab.id ? 'text-accent-foreground' : 'text-muted-foreground'
+                        )} />
+                        <span className="truncate" dir="auto" title={tab.label}>{tab.label}</span>
+                      </button>
+                      {subs.map((sub) => (
+                        <button
+                          key={`${tab.id}:${sub.label}`}
+                          onClick={() => handleSubResultSelect(tab.id, sub)}
+                          className="w-full text-start ps-9 pe-3 py-1.5 rounded-md text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors duration-150 flex items-center gap-2"
+                        >
+                          <span className="truncate block" title={sub.label}>{sub.label}</span>
+                          {sub.advanced && <SearchResultAdvancedBadge label={t('advanced_switch.badge')} />}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </nav>
+        {/* Only the Advanced switch (and the operator's help links, when set):
+            the About card is a page at the end of the list, so the footer
+            doesn't take room from the pages on short screens. */}
+        <div className="border-t border-border px-1 py-1">
+          <HelpLinks className="px-3 py-2" />
+          <AdvancedSettingsSwitch />
+        </div>
+      </div>
+
+      <ResizeHandle
+        pane="sidebar"
+        value={settingsSidebarWidth}
+        min={180}
+        max={400}
+        onResizeStart={() => { dragStartWidth.current = settingsSidebarWidth; setIsResizing(true); }}
+        onResize={(delta) => setSettingsSidebarWidth(Math.max(180, Math.min(400, dragStartWidth.current + delta)))}
+        onResizeEnd={() => {
+          setIsResizing(false);
+          localStorage.setItem('settings-sidebar-width', String(settingsSidebarWidth));
+        }}
+        onDoubleClick={() => { setSettingsSidebarWidth(256); localStorage.setItem('settings-sidebar-width', '256'); }}
+      />
+
+      {/* The page under a row with its name and the plugin side panel's
+          button, like the reader's toolbar, lined up with the sidebar's h-14
+          row. The same element with or without the panel, so a page keeps
+          what was typed when the panel starts or stops docking. */}
+      <div className="flex-1 min-w-0 flex flex-col" data-settings-side-panel-column="">
+        {(sidePanel.docks || !isEmbedded) && (
+          <div data-window-only={sidePanel.docks ? undefined : ""} className={cn("items-center gap-2 h-14 box-content border-b border-border px-2 sm:px-4 lg:px-6 shrink-0", sidePanel.docks ? "flex" : "hidden")} data-settings-panel-row="">
+            {/* The page's h1 below names it for screen readers. */}
+            <div className="flex-1 min-w-0 truncate text-sm font-semibold" aria-hidden="true">{activeTabLabel}</div>
+            {sidePanel.toggle}
+          </div>
+        )}
+        <div ref={sidePanel.rowRef} className="relative flex flex-1 min-h-0">
+          {settingsMain}
+          {sidePanel.panel}
+        </div>
+      </div>
+      </>
+      )}
+      <SidebarAppsModal isOpen={showAppsModal} onClose={closeAppsModal} />
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,256 @@
+// Process-wide queue for plugin-requested host dialogs (confirm / alert /
+// prompt). The sandboxed plugin posts a `ui.confirm`/`ui.prompt` API request;
+// the host enqueues a dialog here and resolves the awaited Promise after the
+// user acts. The `PluginDialogHost` component subscribes and renders one dialog
+// at a time. Prompts collect one or more (optionally masked) text fields so a
+// plugin never has to fall back to the sandbox-blocked `window.prompt`.
+
+import type { AnchorRect } from './dialog-anchor';
+
+export type DialogKind = 'confirm' | 'alert' | 'prompt' | 'custom';
+
+export interface PromptField {
+  /** Key the field's value is returned under. */
+  name: string;
+  label: string;
+  /** `password` masks the input; defaults to `text`. */
+  type?: 'text' | 'password';
+  placeholder?: string;
+  /** Submit is blocked until every required field is non-empty. */
+  required?: boolean;
+}
+
+/**
+ * confirm/alert resolve to a boolean; prompt resolves to a name→value map on
+ * submit, or `null` when cancelled.
+ */
+export type DialogResult = boolean | Record<string, string> | null;
+
+export interface DialogRequest {
+  id: string;
+  /**
+   * For `kind === 'custom'`: the plugin's frame fills the dialog, which is as
+   * tall as the window lets it be (at most 640 px), instead of growing with
+   * its content. For chats, whose input stays at the bottom.
+   */
+  fill?: boolean;
+  pluginId: string;
+  kind: DialogKind;
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** When true, confirm button uses destructive styling. */
+  danger?: boolean;
+  /** Fields to collect, for `kind === 'prompt'`. */
+  fields?: PromptField[];
+  /**
+   * For `kind === 'custom'`: the plugin's own slot name to render in place of
+   * the confirm/prompt body, and the props to pass it. Unlike every other
+   * slot mount, this one renders inside `PluginDialogHost`'s real
+   * `position: fixed; inset: 0` container at the app root - not a small,
+   * CSS-constrained row - so it's the only way a plugin can show a large,
+   * fully custom, genuinely clickable UI (see PR discussion / the
+   * webdav-storage plugin's folder browser for why this exists at all: a
+   * prompt-loop UI works but nobody wants to type folder numbers).
+   */
+  slot?: string;
+  extraProps?: Record<string, unknown>;
+  /** Optional width override in px for the dialog box (custom kind only). */
+  width?: number;
+  /**
+   * Custom kind only: draw the dialog as a popover next to this place (the
+   * control whose activation led to it, see dialog-anchor.ts) instead of
+   * centred. Set by the host, never taken from the plugin.
+   */
+  anchor?: AnchorRect;
+  /** Called when the dialog closes with its typed result (see DialogResult). */
+  resolve: (result: unknown) => void;
+}
+
+const queue: DialogRequest[] = [];
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const l of listeners) {
+    try { l(); } catch { /* ignore */ }
+  }
+}
+
+function uid(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+/** How many dialogs one plugin may open per minute. */
+export const MAX_DIALOGS_PER_MINUTE = 20;
+const recentByPlugin = new Map<string, number[]>();
+
+export class DialogLimitError extends Error {}
+
+/**
+ * Queue a dialog. A plugin gets one dialog at a time and a limited number
+ * per minute: with neither limit, a plugin that opens dialogs in a loop
+ * covers the whole app and the user can't reach Settings to turn it off.
+ */
+export function enqueueDialog(req: Omit<DialogRequest, 'id'>): { id: string } {
+  // One dialog per plugin, except that a plugin's own large dialog (custom)
+  // may ask one confirm/alert/prompt on top of itself ("Discard changes?").
+  const open = queue.filter((d) => d.pluginId === req.pluginId);
+  const overCustom = open.length === 1 && open[0].kind === 'custom' && req.kind !== 'custom';
+  if (open.length > 0 && !overCustom) {
+    throw new DialogLimitError('This plugin already has a dialog open');
+  }
+  const now = Date.now();
+  const recent = (recentByPlugin.get(req.pluginId) ?? []).filter((t) => now - t < 60_000);
+  if (recent.length >= MAX_DIALOGS_PER_MINUTE) {
+    throw new DialogLimitError('This plugin opened too many dialogs; try again in a minute');
+  }
+  recent.push(now);
+  recentByPlugin.set(req.pluginId, recent);
+  const entry: DialogRequest = { ...req, id: uid() };
+  queue.push(entry);
+  notify();
+  return { id: entry.id };
+}
+
+export function head(): DialogRequest | null {
+  return queue[0] ?? null;
+}
+
+/**
+ * A confirm/alert/prompt a plugin opened on top of its own custom dialog,
+ * when that custom dialog is the one showing. Drawn above it; the custom
+ * dialog stays open (and its iframe keeps its state) underneath.
+ */
+export function overlay(): DialogRequest | null {
+  const base = queue[0];
+  if (!base || base.kind !== 'custom') return null;
+  return queue.find((d, i) => i > 0 && d.pluginId === base.pluginId && d.kind !== 'custom') ?? null;
+}
+
+export function resolveHead(result: unknown): void {
+  const entry = queue.shift();
+  if (!entry) return;
+  try { entry.resolve(result); } catch { /* ignore */ }
+  notify();
+}
+
+/**
+ * Resolve one specific dialog. A custom dialog's onResult uses this, so a
+ * second call after it closed can't answer whatever dialog came next.
+ */
+export function resolveDialog(id: string, result: unknown): void {
+  const idx = queue.findIndex((d) => d.id === id);
+  if (idx < 0) return;
+  const [entry] = queue.splice(idx, 1);
+  try { entry.resolve(result); } catch { /* ignore */ }
+  notify();
+}
+
+/** Forget rate-limit history (tests). */
+export function resetDialogLimits(): void {
+  recentByPlugin.clear();
+}
+
+/** The "cancelled" result for a given dialog kind (null for prompt/custom, else false). */
+function cancelledResult(kind: DialogKind): unknown {
+  return kind === 'prompt' || kind === 'custom' ? null : false;
+}
+
+/** Cancel every pending dialog for a plugin (called on unload). */
+export function cancelForPlugin(pluginId: string): void {
+  let changed = false;
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (queue[i].pluginId === pluginId) {
+      const entry = queue[i];
+      queue.splice(i, 1);
+      try { entry.resolve(cancelledResult(entry.kind)); } catch { /* ignore */ }
+      changed = true;
+    }
+  }
+  if (changed) notify();
+}
+
+/** Calls waiting on a prompt the host can't see, per plugin (see holdForUser). */
+const userHolds = new Map<string, number>();
+
+/**
+ * The plugin is waiting on the user somewhere other than these dialogs, such as a
+ * smart card's PIN prompt from the OS. It counts as an open dialog for the hook timer
+ * until the returned function is called. Nothing is drawn for it.
+ */
+export function holdForUser(pluginId: string): () => void {
+  userHolds.set(pluginId, (userHolds.get(pluginId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (userHolds.get(pluginId) ?? 1) - 1;
+    if (left > 0) userHolds.set(pluginId, left);
+    else userHolds.delete(pluginId);
+    notify();
+  };
+}
+
+/** Whether the plugin has a dialog showing or waiting in the queue, or a hold. */
+export function hasDialogFor(pluginId: string): boolean {
+  return userHolds.has(pluginId) || queue.some((d) => d.pluginId === pluginId);
+}
+
+/**
+ * Calls `cb` once the plugin has no dialog left in the queue (right away if it
+ * has none). Returns a function that drops the callback.
+ */
+export function whenNoDialogFor(pluginId: string, cb: () => void): () => void {
+  if (!hasDialogFor(pluginId)) {
+    cb();
+    return () => {};
+  }
+  const unsubscribe = subscribe(() => {
+    if (hasDialogFor(pluginId)) return;
+    unsubscribe();
+    cb();
+  });
+  return unsubscribe;
+}
+
+export function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+/**
+ * Internal helper used by host-api to convert a confirm/alert `enqueueDialog`
+ * call into a boolean Promise the plugin-side `await` can land on.
+ */
+export function awaitDialog(req: Omit<DialogRequest, 'id' | 'resolve'>): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    enqueueDialog({ ...req, resolve: (r) => resolve(r === true) });
+  });
+}
+// (enqueueDialog throws synchronously inside the executor, which rejects
+// the promise, so the plugin's await sees the limit error.)
+
+/**
+ * Prompt variant of `awaitDialog`: resolves to the collected name→value map on
+ * submit, or `null` when the user cancels/dismisses.
+ */
+export function awaitPrompt(req: Omit<DialogRequest, 'id' | 'resolve'>): Promise<Record<string, string> | null> {
+  return new Promise((resolve) => {
+    enqueueDialog({ ...req, resolve: (r) => resolve(r && typeof r === 'object' ? (r as Record<string, string>) : null) });
+  });
+}
+
+/**
+ * Custom variant: renders the given plugin slot inside PluginDialogHost's
+ * real full-screen container instead of a confirm/prompt form. Resolves to
+ * whatever value the slot component passes to its `onResult` prop (an
+ * ordinary callback, marshalled across the iframe boundary the same way
+ * `composer-attachment-source`'s `onAttach` is), or `null` if the user
+ * closes the dialog (X button / Escape) without calling it.
+ */
+export function awaitCustomDialog(req: Omit<DialogRequest, 'id' | 'resolve' | 'kind'>): Promise<unknown> {
+  return new Promise((resolve) => {
+    enqueueDialog({ ...req, kind: 'custom', resolve });
+  });
+}

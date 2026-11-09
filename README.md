@@ -47,16 +47,18 @@ continuity; everything a customer sees says Loomix.
 
 ## The webmail client
 
-The browser client, **Loomix Mail**, is a separate source repository
-([innotelinc/webmail](https://github.com/innotelinc/webmail)) because it is built
-and released on its own cadence — it follows upstream Bulwark and is rebranded on
-each upstream release. What belongs to *this* platform is how that client is
-deployed, pinned and upgraded, and that lives here:
+The browser client, **Loomix Mail**, lives in `webmail/` and the mail engine in
+the rest of this repository. They ship together: one release pins both, and a
+single checkout has to answer what is deployed on a mail host. The directory is
+imported from [innotelinc/webmail](https://github.com/innotelinc/webmail) at the
+release recorded in `webmail.version`; that repository stays where upstream
+Bulwark is synced, and this import is refreshed on each client release.
 
 | Path | What it is |
 | --- | --- |
+| `webmail/` | the client sources, imported at the pinned release |
 | `deploy/webmail/docker-compose.yml` | the container the mail host runs, image as a commit tag |
-| `webmail.version` | the release this platform pins (version, revision, image, upstream) |
+| `webmail.version` | the release this platform deploys (client version, image revision, imported source revision) |
 | `scripts/upgrade-webmail.sh` | the one entry point: `--check`, apply, `--pin <tag>`, `--force` |
 
 A green push to the client's `main` publishes `ghcr.io/innotelinc/webmail-release`
@@ -65,6 +67,9 @@ commit tag and rolling back if the new build does not go healthy. The timer is
 the routine path; `scripts/upgrade-webmail.sh` is for a deliberate pin or a
 rollback. Either way the running revision is readable from the container's
 `org.opencontainers.image.revision` label.
+
+The client builds from `webmail/Dockerfile`; the deployment does not build it —
+it pulls the published image, so a mail host needs no Node toolchain.
 
 ## 🧱 Architecture
 

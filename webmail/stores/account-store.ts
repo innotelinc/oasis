@@ -1,0 +1,352 @@
+import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
+import { mainWindowStorage } from '@/lib/popout/window-role';
+import { IS_DESKTOP_BUILD } from '@/lib/desktop/flag';
+import { forgetDesktopServer } from '@/lib/desktop/bridge';
+import { generateAccountId, generateAvatarColor, getMaxAccounts } from '@/lib/account-utils';
+import { authHooks } from '@/lib/plugin-hooks';
+import { clearEvicted, dropEvictedOwner, isEvicted, markEvicted, rememberEvictedOwner } from '@/lib/offline/state';
+
+export type AccountRemovalReason = 'explicit' | 'evicted' | 'wiped';
+
+const removalListeners = new Set<(accountId: string, reason: AccountRemovalReason) => void>();
+
+/** Told before an account leaves the registry, and why. */
+export function onAccountRemoved(listener: (accountId: string, reason: AccountRemovalReason) => void): () => void {
+  removalListeners.add(listener);
+  return () => removalListeners.delete(listener);
+}
+
+function sameServerOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return a === b;
+  }
+}
+
+export interface AccountEntry {
+  /** Unique key: `${username}@${serverHostname}` */
+  id: string;
+  /** Display label (defaults to email, user-editable) */
+  label: string;
+  /** Full server URL */
+  serverUrl: string;
+  /** Username / email used to authenticate */
+  username: string;
+  /**
+   * Authentication mode: a password (Basic), OAuth/SSO tokens that renew, or
+   * an access token the user pasted (Bearer, no renewal).
+   */
+  authMode: 'basic' | 'oauth' | 'token';
+  /** Cookie slot index for session/token cookies (0 ≤ slot < MAX_ACCOUNT_SLOTS) */
+  cookieSlot: number;
+  /** Whether "Remember Me" was checked (password and access-token logins) */
+  rememberMe: boolean;
+  /**
+   * Signed in through the identity provider's own login (OAuth code or SSO
+   * flow), so the provider may hold a login session that signing out should
+   * end too (#905). A password login, even one upgraded to OAuth tokens, has
+   * none. `undefined` = signed in before this was recorded.
+   */
+  providerSession?: boolean;
+  /**
+   * Server-confirmed account identifiers captured at login: the account-id form
+   * ({@link generateAccountId}) of the JMAP Session.username and the primary
+   * sending-identity email. The account-switch guard matches a reconnected
+   * session against these so a short login username (e.g. `linus`) that the
+   * server canonicalizes to a full address (`linus@example.com`) is still
+   * recognized as the same account. `undefined` = never captured (legacy entry).
+   */
+  serverIdentifiers?: string[];
+  /** Cached display info */
+  displayName: string;
+  email: string;
+  avatarColor: string;
+  /** Timestamp of last successful login */
+  lastLoginAt: number;
+  /**
+   * When the user last signed in to it with a password, token or provider
+   * login (not a restore). The organisation's maximum session length counts
+   * from here. `undefined` = signed in before this was recorded.
+   */
+  signedInAt?: number;
+  /** Whether this account is currently connected */
+  isConnected: boolean;
+  /** Whether this account had a connection error */
+  hasError: boolean;
+  errorMessage?: string;
+  /** Whether this is the default account (loaded on app start) */
+  isDefault: boolean;
+  /**
+   * Brought back from the account list backup and not signed in on this
+   * device yet. Kept across reloads, and opening it leads to the sign-in form.
+   */
+  awaitingSignIn?: boolean;
+  /**
+   * Opened by an admin through an impersonation handoff rather than by the
+   * mailbox owner. The server says so each time the session is restored.
+   */
+  impersonated?: boolean;
+}
+
+interface AccountState {
+  accounts: AccountEntry[];
+  activeAccountId: string | null;
+  defaultAccountId: string | null;
+
+  addAccount: (entry: Omit<AccountEntry, 'id' | 'cookieSlot' | 'avatarColor'>) => string;
+  /**
+   * `reason`: 'explicit' when someone signed the account out or removed it, its
+   * offline data goes with it; 'evicted' when the app dropped it by itself.
+   */
+  removeAccount: (accountId: string, reason?: AccountRemovalReason) => void;
+  setActiveAccount: (accountId: string) => void;
+  setDefaultAccount: (accountId: string) => void;
+  getDefaultAccount: () => AccountEntry | null;
+  updateAccount: (accountId: string, updates: Partial<AccountEntry>) => void;
+  reorderAccounts: (orderedIds: string[]) => void;
+  getActiveAccount: () => AccountEntry | null;
+  getAccountById: (accountId: string) => AccountEntry | undefined;
+  getNextCookieSlot: () => number;
+  hasAccount: (username: string, serverUrl: string) => boolean;
+}
+
+export const useAccountStore = create<AccountState>()(
+  persist(
+    (set, get) => ({
+      accounts: [],
+      activeAccountId: null,
+      defaultAccountId: null,
+
+      addAccount: (entry) => {
+        const state = get();
+
+        const id = generateAccountId(entry.username, entry.serverUrl);
+        clearEvicted(id);
+        dropEvictedOwner(id);
+        if (state.accounts.some((a) => a.id === id)) {
+          // Already exists - update mutable fields and return existing id
+          set((s) => ({
+            accounts: s.accounts.map((a) =>
+              a.id === id
+                ? {
+                    ...a,
+                    rememberMe: entry.rememberMe,
+                    isConnected: entry.isConnected,
+                    hasError: entry.hasError,
+                    errorMessage: undefined,
+                    lastLoginAt: entry.lastLoginAt,
+                    authMode: entry.authMode,
+                    // Any sign-in ends the wait, whichever way it went.
+                    awaitingSignIn: entry.awaitingSignIn,
+                  }
+                : a
+            ),
+          }));
+          return id;
+        }
+
+        const max = getMaxAccounts();
+        if (state.accounts.length >= max) {
+          throw new Error(`Maximum of ${max} accounts reached`);
+        }
+
+        const cookieSlot = state.getNextCookieSlot();
+        const avatarColor = generateAvatarColor(entry.email || entry.username);
+        const isDefault = state.accounts.length === 0; // first account is default
+
+        const account: AccountEntry = {
+          ...entry,
+          id,
+          cookieSlot,
+          avatarColor,
+          isDefault,
+        };
+
+        set((s) => ({
+          accounts: [...s.accounts, account],
+          // If there is no active account, activate this one
+          activeAccountId: s.activeAccountId ?? id,
+          defaultAccountId: isDefault ? id : s.defaultAccountId,
+        }));
+        void authHooks.onAccountAdd.emit({ accountId: id });
+
+        return id;
+      },
+
+      removeAccount: (accountId, reason = 'explicit') => {
+        if (!get().accounts.some((a) => a.id === accountId)) return;
+        const leaving = get().accounts.find((a) => a.id === accountId);
+        if (reason === 'evicted') {
+          markEvicted(accountId);
+          if (IS_DESKTOP_BUILD && leaving && isEvicted(accountId)) rememberEvictedOwner(accountId, leaving);
+        }
+        for (const listener of [...removalListeners]) listener(accountId, reason);
+        set((s) => {
+          const remaining = s.accounts.filter((a) => a.id !== accountId);
+          const wasDefault = s.defaultAccountId === accountId;
+          const wasActive = s.activeAccountId === accountId;
+
+          let newDefault = s.defaultAccountId;
+          if (wasDefault) {
+            newDefault = remaining[0]?.id ?? null;
+            // Mark new default
+            if (newDefault) {
+              const idx = remaining.findIndex((a) => a.id === newDefault);
+              if (idx >= 0) {
+                remaining[idx] = { ...remaining[idx], isDefault: true };
+              }
+            }
+          }
+
+          return {
+            accounts: remaining,
+            activeAccountId: wasActive ? (remaining[0]?.id ?? null) : s.activeAccountId,
+            defaultAccountId: newDefault,
+          };
+        });
+        void authHooks.onAccountRemove.emit({ accountId });
+        // The desktop app stops trusting a server its last account left.
+        if (IS_DESKTOP_BUILD && leaving && !get().accounts.some((a) => sameServerOrigin(a.serverUrl, leaving.serverUrl))) {
+          forgetDesktopServer(leaving.serverUrl, 'signed-out');
+        }
+      },
+
+      setActiveAccount: (accountId) => {
+        const account = get().accounts.find((a) => a.id === accountId);
+        if (!account) return;
+        set({ activeAccountId: accountId });
+      },
+
+      setDefaultAccount: (accountId) => {
+        const account = get().accounts.find((a) => a.id === accountId);
+        if (!account) return;
+        set((s) => ({
+          defaultAccountId: accountId,
+          accounts: s.accounts.map((a) => ({
+            ...a,
+            isDefault: a.id === accountId,
+          })),
+        }));
+      },
+
+      getDefaultAccount: () => {
+        const state = get();
+        if (state.defaultAccountId) {
+          const account = state.accounts.find((a) => a.id === state.defaultAccountId);
+          if (account) return account;
+        }
+        return state.accounts[0] ?? null;
+      },
+
+      updateAccount: (accountId, updates) => {
+        set((s) => ({
+          accounts: s.accounts.map((a) =>
+            a.id === accountId ? { ...a, ...updates } : a
+          ),
+        }));
+      },
+
+      reorderAccounts: (orderedIds) => {
+        set((s) => {
+          const byId = new Map(s.accounts.map((a) => [a.id, a]));
+          const reordered: AccountEntry[] = [];
+          for (const id of orderedIds) {
+            const a = byId.get(id);
+            if (a) {
+              reordered.push(a);
+              byId.delete(id);
+            }
+          }
+          // Append any accounts that weren't in the ordered list (defensive)
+          for (const a of byId.values()) reordered.push(a);
+          return { accounts: reordered };
+        });
+      },
+
+      getActiveAccount: () => {
+        const state = get();
+        return state.accounts.find((a) => a.id === state.activeAccountId) ?? null;
+      },
+
+      getAccountById: (accountId) => {
+        return get().accounts.find((a) => a.id === accountId);
+      },
+
+      getNextCookieSlot: () => {
+        const used = new Set(get().accounts.map((a) => a.cookieSlot));
+        let i = 0;
+        while (used.has(i)) i++;
+        return i;
+      },
+
+      hasAccount: (username, serverUrl) => {
+        const id = generateAccountId(username, serverUrl);
+        return get().accounts.some((a) => a.id === id);
+      },
+    }),
+    {
+      name: 'account-registry',
+      storage: createJSONStorage(mainWindowStorage),
+      partialize: (state) => ({
+        accounts: state.accounts,
+        activeAccountId: state.activeAccountId,
+        defaultAccountId: state.defaultAccountId,
+      }),
+      // `isConnected` / `hasError` describe a *live* JMAP client, which never
+      // survives a reload - yet the whole entry is persisted, so a fresh tab
+      // rehydrated them as still-connected. Consumers then treated an account
+      // whose client had not been restored yet as ready: the unified mailbox
+      // filters on `isConnected` and silently dropped such accounts when their
+      // client was missing from the map, and the effects keyed on the
+      // "connected accounts" signature never re-fired because the signature was
+      // already complete at mount. Clearing them here makes both reflect this
+      // session, so the signature genuinely changes as each account connects
+      // (#950).
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        state.accounts = state.accounts.map((a) => (
+          a.isConnected || a.hasError
+            ? { ...a, isConnected: false, hasError: false, errorMessage: undefined }
+            : a
+        ));
+      },
+    }
+  )
+);
+
+/**
+ * Resolves once the login `accountId` is connected, or with `false` when it
+ * never will be: not one of this browser's logins, its restore failed, or
+ * `timeoutMs` went by.
+ *
+ * A link can arrive while the browser is still reconnecting its logins - a
+ * notification tapped with the app closed does exactly that - and they come
+ * back one at a time, so the mailbox a link names is often not connected yet
+ * when the link is read. Treating "not yet" as "unavailable" sent the user to
+ * the wrong mailbox with an error; this waits for the login instead.
+ */
+export function waitForConnectedAccount(accountId: string, timeoutMs = 20_000): Promise<boolean> {
+  const settled = (account: AccountEntry | undefined): boolean | null => {
+    if (!account) return false;
+    if (account.isConnected) return true;
+    if (account.hasError) return false;
+    return null;
+  };
+  const now = settled(useAccountStore.getState().accounts.find((a) => a.id === accountId));
+  if (now !== null) return Promise.resolve(now);
+
+  return new Promise((resolve) => {
+    const finish = (value: boolean) => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    const unsubscribe = useAccountStore.subscribe((state) => {
+      const result = settled(state.accounts.find((a) => a.id === accountId));
+      if (result !== null) finish(result);
+    });
+  });
+}

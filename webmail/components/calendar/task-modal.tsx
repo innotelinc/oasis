@@ -1,0 +1,422 @@
+"use client";
+
+import { useState, useEffect, useCallback, useRef, useMemo, useId } from "react";
+import { useCloseBesideControls } from "@/hooks/use-close-beside-controls";
+import { useTranslations } from "next-intl";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { IconButton } from "@/components/ui/icon-button";
+import { X, Trash2, CalendarDays, Bell, Flag } from "@/components/icons";
+import { format, parseISO } from "date-fns";
+
+import type { CalendarTask, Calendar, CalendarEventAlert } from "@/lib/jmap/types";
+import { withOwnAlertIds } from "@/lib/calendar-alerts";
+import { PluginSlot } from "@/components/plugins/plugin-slot";
+import { taskToView } from "@/lib/plugin-projection";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useConfirmDialog } from "@/hooks/use-confirm-dialog";
+import { taskTargets } from "@/lib/calendar-targets";
+import { CalendarSelect } from "@/components/calendar/calendar-select";
+import { useAccountStore } from "@/stores/account-store";
+import { useTaskStore } from "@/stores/task-store";
+import { defaultTaskList } from "@/components/calendar/task-list-view";
+
+interface TaskModalProps {
+  task?: CalendarTask | null;
+  calendars: Calendar[];
+  /** Resolving false keeps the form open (a plugin stopped the save). */
+  onSave: (data: Partial<CalendarTask>) => void | boolean | Promise<void | boolean>;
+  onDelete?: (id: string) => void;
+  onClose: () => void;
+  /** Told whether the form holds changes that aren't saved, so the page can ask before it drops them. */
+  onDirtyChange?: (dirty: boolean) => void;
+  isMobile?: boolean;
+  /** Subscribed feeds are read-only: no tasks go there. */
+  isSubscriptionCalendar?: (calendarId: string) => boolean;
+}
+
+type PriorityLevel = "none" | "high" | "medium" | "low";
+type AlertOption = "none" | "at_time" | "5" | "15" | "30" | "60" | "1440";
+
+function priorityToLevel(p: number): PriorityLevel {
+  if (p >= 1 && p <= 4) return "high";
+  if (p === 5) return "medium";
+  if (p >= 6 && p <= 9) return "low";
+  return "none";
+}
+
+function levelToPriority(l: PriorityLevel): number {
+  switch (l) {
+    case "high": return 1;
+    case "medium": return 5;
+    case "low": return 9;
+    default: return 0;
+  }
+}
+
+export function TaskModal({
+  task,
+  calendars,
+  onSave,
+  onDelete,
+  onClose,
+  onDirtyChange,
+  isMobile = false,
+  isSubscriptionCalendar,
+}: TaskModalProps) {
+  const t = useTranslations("calendar");
+  const tUx = useTranslations("ux_pim_calendar");
+  const tP2 = useTranslations("ux_p2_pim_cal");
+  const tCommon = useTranslations("common");
+  // The header's close goes to its start when the window's own close is at its end.
+  const [header, setHeader] = useState<HTMLDivElement | null>(null);
+  const closeFirst = useCloseBesideControls(header);
+  const id = useId();
+  const isEdit = !!task;
+  const titleRef = useRef<HTMLInputElement>(null);
+  // task-detail-section: the saved task, for an existing task only.
+  const pluginTaskProps = useMemo(() => (task ? { task: taskToView(task) } : null), [task]);
+
+  // The lists a task can go into: task lists only, never a calendar of
+  // events or a read-only one (pim-p2-13). An account without one keeps
+  // its default calendar, where its tasks already are.
+  const activeLocalAccountId = useAccountStore((s) => s.activeAccountId);
+  const tasks = useTaskStore((s) => s.tasks);
+  const taskCalendarId = task ? Object.keys(task.calendarIds)[0] : undefined;
+  const writableCalendars = useMemo(() => taskTargets(calendars, isSubscriptionCalendar, {
+    holdingTasks: tasks.flatMap((x) => Object.keys(x.calendarIds ?? {})),
+  }), [calendars, isSubscriptionCalendar, tasks]);
+  // A new task goes to the first task-only list of the account on screen (pim-8).
+  const defaultCalendarId = defaultTaskList(writableCalendars, activeLocalAccountId)?.id ?? calendars[0]?.id ?? "";
+
+  const [title, setTitle] = useState(task?.title ?? "");
+  const [description, setDescription] = useState(task?.description ?? "");
+  const [dueDate, setDueDate] = useState(task?.due ? format(parseISO(task.due), "yyyy-MM-dd") : "");
+  const [dueTime, setDueTime] = useState(task?.due && !task.showWithoutTime ? format(parseISO(task.due), "HH:mm") : "");
+  const [showTime, setShowTime] = useState(task?.due ? !task.showWithoutTime : false);
+  const [priority, setPriority] = useState<PriorityLevel>(priorityToLevel(task?.priority ?? 0));
+  const [progress, setProgress] = useState<CalendarTask["progress"]>(task?.progress ?? "needs-action");
+  const [calendarId, setCalendarId] = useState(() => {
+    if (task) return taskCalendarId ?? defaultCalendarId;
+    return defaultCalendarId;
+  });
+  // A task already in a read-only calendar keeps it listed.
+  const calendarOptions = calendars.filter((c) => c.id === calendarId || c.id === taskCalendarId || writableCalendars.includes(c));
+  const [alertOption, setAlertOption] = useState<AlertOption>(() => {
+    if (!task?.alerts) return "none";
+    const first = Object.values(task.alerts)[0];
+    if (!first || first.trigger["@type"] !== "OffsetTrigger") return "none";
+    const offset = first.trigger.offset;
+    if (offset === "PT0S") return "at_time";
+    const m = offset.match(/-?PT?(\d+)M$/);
+    if (m) return m[1] as AlertOption;
+    const h = offset.match(/-?PT?(\d+)H$/);
+    if (h) return String(parseInt(h[1]) * 60) as AlertOption;
+    const d = offset.match(/-?P(\d+)D/);
+    if (d) return String(parseInt(d[1]) * 1440) as AlertOption;
+    return "none";
+  });
+  // The control only shows the first alert (and only simple offset triggers),
+  // so writing `alerts` back on every save silently dropped the others. Track
+  // whether the user actually changed it and only patch alerts then. (#504)
+  const [alertTouched, setAlertTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // A form with changes asks before X, Cancel or Escape drop them (R5).
+  const formState = JSON.stringify({ title, description, dueDate, dueTime, showTime, priority, progress, calendarId, alertOption });
+  const [initialForm] = useState(formState);
+  const isDirty = formState !== initialForm;
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  const { dialogProps: discardDialogProps, confirm: confirmDiscard } = useConfirmDialog();
+  const askingRef = useRef(false);
+  const requestClose = useCallback(() => {
+    if (!isDirty) { onClose(); return; }
+    if (askingRef.current) return;
+    askingRef.current = true;
+    void confirmDiscard({
+      title: t("discard.title"),
+      message: t("discard.message"),
+      confirmText: t("discard.confirm"),
+      cancelText: t("discard.keep"),
+      variant: "destructive",
+    }).then((ok) => {
+      askingRef.current = false;
+      if (ok) onClose();
+    });
+  }, [isDirty, onClose, confirmDiscard, t]);
+
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      let due: string | null = null;
+      let showWithoutTime = true;
+      if (dueDate) {
+        if (showTime && dueTime) {
+          due = `${dueDate}T${dueTime}:00`;
+          showWithoutTime = false;
+        } else {
+          due = dueDate;
+          showWithoutTime = true;
+        }
+      }
+
+      const data: Partial<CalendarTask> = {
+        "@type": "Task",
+        title: title.trim(),
+        description: description.trim() || "",
+        due,
+        showWithoutTime,
+        priority: levelToPriority(priority),
+        progress,
+        calendarIds: { [calendarId]: true },
+      };
+
+      if (alertTouched) {
+        // Merge into the existing map: the control edits the first alert
+        // (the one it displayed) and leaves any others untouched. (#504)
+        const merged: Record<string, CalendarEventAlert> = { ...(task?.alerts ?? {}) };
+        const editedKey = Object.keys(merged)[0] ?? "default-alert";
+        if (alertOption === "none") {
+          delete merged[editedKey];
+        } else {
+          const offset = alertOption === "at_time" ? "PT0S" : `-PT${alertOption}M`;
+          merged[editedKey] = {
+            "@type": "Alert",
+            trigger: { "@type": "OffsetTrigger", offset, relativeTo: "start" },
+            action: "display",
+            acknowledged: null,
+            relatedTo: null,
+          };
+        }
+        // A task that uses its calendar's default alerts turns them off:
+        // Stalwart 1.0 shows the defaults in `alerts` instead of the task's
+        // own while they are on, and drops alerts under the default ids.
+        const alerts = task?.useDefaultAlerts
+          ? withOwnAlertIds(Object.values(merged), Object.keys(task.alerts ?? {}))
+          : merged;
+        if (task?.useDefaultAlerts) data.useDefaultAlerts = false;
+        data.alerts = Object.keys(alerts).length > 0 ? alerts : null;
+      }
+
+      if (isEdit && task) {
+        data.id = task.id;
+      }
+
+      if ((await onSave(data)) === false) return;
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }, [title, description, dueDate, dueTime, showTime, priority, progress, calendarId, alertOption, alertTouched, isEdit, task, onSave, onClose]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      requestClose();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      handleSave();
+    }
+  }, [requestClose, handleSave]);
+
+  const close = (
+    <IconButton label={tCommon("close")} onClick={requestClose}>
+      <X />
+    </IconButton>
+  );
+
+  return (
+    // The desktop side panel is a dialog named by its title, like the event
+    // editor; on a phone the full-screen wrapper around it is.
+    <div
+      role={isMobile ? undefined : "dialog"}
+      aria-labelledby={isMobile ? undefined : `${id}-heading`}
+      className="flex flex-col h-full bg-background"
+      onKeyDown={handleKeyDown}
+    >
+      {/* Header */}
+      <div ref={setHeader} data-window-top-row="" className="flex items-center gap-2 px-4 py-3 border-b border-border">
+        {closeFirst && close}
+        <h2 id={`${id}-heading`} className="min-w-0 flex-1 text-sm font-semibold">
+          {isEdit ? t("tasks.edit") : t("tasks.create")}
+        </h2>
+        {!closeFirst && close}
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Title */}
+        <Input
+          ref={titleRef}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={t("tasks.title_placeholder")}
+          aria-label={t("tasks.title_placeholder")}
+          className="text-base font-medium"
+        />
+
+        {/* Description */}
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder={t("tasks.description_placeholder")}
+          aria-label={t("form.description")}
+          rows={3}
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-hidden resize-none"
+        />
+
+        {/* Due Date */}
+        <div className="space-y-2">
+          <label htmlFor={`${id}-due`} id={`${id}-due-label`} className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+            <CalendarDays className="h-3.5 w-3.5" />
+            {t("tasks.due_date")}
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id={`${id}-due`}
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+            />
+            {dueDate && (
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showTime}
+                  onChange={(e) => setShowTime(e.target.checked)}
+                  className="rounded"
+                />
+                {t("tasks.include_time")}
+              </label>
+            )}
+            {showTime && (
+              <input
+                type="time"
+                aria-labelledby={`${id}-due-label`}
+                value={dueTime}
+                onChange={(e) => setDueTime(e.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Priority */}
+        <div className="space-y-2">
+          <label htmlFor={`${id}-priority`} className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+            <Flag className="h-3.5 w-3.5" />
+            {t("tasks.priority")}
+          </label>
+          <select
+            id={`${id}-priority`}
+            value={priority}
+            onChange={(e) => setPriority(e.target.value as PriorityLevel)}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-full"
+          >
+            <option value="none">{t("tasks.priority_none")}</option>
+            <option value="high">{t("tasks.priority_high")}</option>
+            <option value="medium">{t("tasks.priority_medium")}</option>
+            <option value="low">{t("tasks.priority_low")}</option>
+          </select>
+        </div>
+
+        {/* Progress */}
+        <div className="space-y-2">
+          <label htmlFor={`${id}-progress`} className="text-xs font-medium text-muted-foreground">
+            {t("tasks.progress")}
+          </label>
+          <select
+            id={`${id}-progress`}
+            value={progress}
+            onChange={(e) => setProgress(e.target.value as CalendarTask["progress"])}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-full"
+          >
+            {/* Plain words; the stored values stay the standard's (pim-19). */}
+            <option value="needs-action">{tUx("task_status_not_started")}</option>
+            <option value="in-process">{tUx("task_status_in_progress")}</option>
+            <option value="completed">{t("tasks.progress_completed")}</option>
+            <option value="cancelled">{t("tasks.progress_cancelled")}</option>
+          </select>
+        </div>
+
+        {/* Calendar */}
+        {calendarOptions.length > 1 && (
+          <div className="space-y-2">
+            <label htmlFor={`${id}-calendar`} className="text-xs font-medium text-muted-foreground">
+              {tP2("task_list_label")}
+            </label>
+            <CalendarSelect
+              id={`${id}-calendar`}
+              kind="task"
+              calendars={calendarOptions}
+              value={calendarId}
+              onChange={setCalendarId}
+              className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-full"
+            />
+          </div>
+        )}
+
+        {/* Alert */}
+        <div className="space-y-2">
+          <label htmlFor={`${id}-alert`} className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+            <Bell className="h-3.5 w-3.5" />
+            {t("tasks.alert")}
+          </label>
+          <select
+            id={`${id}-alert`}
+            value={alertOption}
+            onChange={(e) => {
+              setAlertOption(e.target.value as AlertOption);
+              setAlertTouched(true);
+            }}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm w-full"
+          >
+            <option value="none">{t("tasks.alert_none")}</option>
+            <option value="at_time">{t("tasks.alert_at_time")}</option>
+            <option value="5">{t("tasks.alert_5min")}</option>
+            <option value="15">{t("tasks.alert_15min")}</option>
+            <option value="30">{t("tasks.alert_30min")}</option>
+            <option value="60">{t("tasks.alert_1hr")}</option>
+            <option value="1440">{t("tasks.alert_1day")}</option>
+          </select>
+        </div>
+
+        {pluginTaskProps && <PluginSlot name="task-detail-section" className="w-full" extraProps={pluginTaskProps} />}
+      </div>
+
+      {/* Footer */}
+      <div data-toast-avoid="bottom" className="flex items-center justify-between px-4 py-3 border-t border-border">
+        <div>
+          {isEdit && onDelete && task && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => onDelete(task.id)}
+            >
+              <Trash2 className="h-4 w-4 me-1" />
+              {t("tasks.delete")}
+            </Button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={requestClose}>
+            {t("tasks.cancel")}
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={!title.trim() || saving}>
+            {t("tasks.save")}
+          </Button>
+        </div>
+      </div>
+      <ConfirmDialog {...discardDialogProps} />
+    </div>
+  );
+}
